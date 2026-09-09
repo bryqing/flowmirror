@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Flame } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { SyncStatus } from "@/components/sync/sync-status";
+import { DeepDivePanel } from "@/components/sync/deep-dive-panel";
 import { cn } from "@/lib/utils";
 
 /** 应用外壳：氛围背景 + 深夜烛光模式自动切换 + PWA 全屏安全区适配 */
@@ -39,6 +40,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
       >
         <SyncStatus />
+      </div>
+
+      {/* 深夜深潜入口（固定左上角，仅烛光模式显示） */}
+      <div
+        className="pointer-events-none fixed left-4 z-50 flex items-center"
+        style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
+      >
+        <DeepDivePanel />
       </div>
 
       {children}

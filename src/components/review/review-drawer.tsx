@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Brain, CheckCircle2, MessageSquareText } from "lucide-react";
+import { Brain, CheckCircle2, MessageSquareText, Loader2, WandSparkles } from "lucide-react";
 import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useFlow } from "@/components/flow-context";
 import { CATEGORY_META } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useAi } from "@/lib/use-ai";
 
 const BLOCKER_TAGS = ["开场焦虑", "被打断", "工具不熟", "估时乐观", "环境嘈杂", "没有卡点"];
 const LESSON_TAGS = ["先搭框架", "关通知", "拆小步", "烂初稿先行", "番茄25分", "环境隔离"];
@@ -23,6 +24,8 @@ export function ReviewDrawer() {
   const [blockerTags, setBlockerTags] = useState<string[]>([]);
   const [lessonTags, setLessonTags] = useState<string[]>([]);
   const [note, setNote] = useState("");
+
+  const { loading: aiLoading, result: aiResult, error: aiError, run: runProbe } = useAi<{ probes: string }>("/api/ai/review-probe");
 
   /* 每次打开新任务时重置 */
   useEffect(() => {
@@ -98,6 +101,40 @@ export function ReviewDrawer() {
             placeholder={isBlackhole ? "例：其实不是想刷，是不想面对那封难写的邮件……" : "例：先写结论果然快多了，下次继续"}
             rows={3}
           />
+        </div>
+
+        {/* AI 追问 */}
+        <div className="flex flex-col gap-2 rounded-2xl border border-cat-deep/20 bg-cat-deep/[0.04] p-3.5">
+          <div className="flex items-center justify-between">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-cat-deep">
+              <WandSparkles className="size-3.5" />
+              AI 追问 · 帮你沉淀经验
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1 text-[11px] text-cat-deep hover:bg-cat-deep/10"
+              onClick={() =>
+                runProbe({
+                  taskTitle: reviewTask.title,
+                  category: reviewTask.category,
+                  note,
+                  blockerTags,
+                  lessonTags,
+                })
+              }
+              disabled={aiLoading}
+            >
+              {aiLoading ? <Loader2 className="size-3.5 animate-spin" /> : <WandSparkles className="size-3.5" />}
+              {aiLoading ? "思考中…" : "追问我"}
+            </Button>
+          </div>
+          {aiResult && (
+            <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{aiResult.probes}</p>
+          )}
+          {aiError && (
+            <p className="text-[11px] leading-relaxed text-cat-blackhole/80">{aiError}</p>
+          )}
         </div>
 
         {/* 操作 */}

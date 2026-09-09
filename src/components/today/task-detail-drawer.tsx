@@ -19,6 +19,8 @@ import { useFlow } from "@/components/flow-context";
 import { CATEGORY_META } from "@/lib/types";
 import { cn, fmtClock, fmtDuration } from "@/lib/utils";
 import { ensureNotifyPermission, playBrake, playChime, notify } from "@/lib/sound";
+import { useAi } from "@/lib/use-ai";
+import { WandSparkles, Loader2 } from "lucide-react";
 
 type TimerState = "idle" | "running" | "paused" | "finished";
 
@@ -30,6 +32,8 @@ export function TaskDetailDrawer() {
   const [secondsLeft, setSecondsLeft] = useState(25 * 60);
   const [totalSeconds, setTotalSeconds] = useState(25 * 60);
   const finishedRef = useRef(false);
+
+  const { loading: aiLoading, result: aiResult, error: aiError, run: runTactic } = useAi<{ tactic: string }>("/api/ai/tactic");
 
   const isBlackhole = detailTask?.category === "blackhole";
   const done = detailTask?.status === "done";
@@ -178,6 +182,50 @@ export function TaskDetailDrawer() {
                 </Button>
               )}
             </div>
+          </div>
+        )}
+
+        {/* AI 战术锦囊 */}
+        {!frozen && !done && (
+          <div className="flex flex-col gap-2.5 rounded-2xl border border-cat-deep/20 bg-cat-deep/[0.04] p-3.5 glow-deep">
+            <div className="flex items-center justify-between">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-cat-deep">
+                <WandSparkles className="size-3.5" />
+                AI 战术锦囊
+              </p>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 gap-1 text-[11px] text-cat-deep hover:bg-cat-deep/10"
+                onClick={() =>
+                  runTactic({
+                    tasks: [
+                      {
+                        title: detailTask.title,
+                        category: detailTask.category,
+                        status: detailTask.status,
+                        plannedDuration: detailTask.plannedDuration,
+                      },
+                    ],
+                  })
+                }
+                disabled={aiLoading}
+              >
+                {aiLoading ? <Loader2 className="size-3.5 animate-spin" /> : <WandSparkles className="size-3.5" />}
+                {aiLoading ? "生成中…" : "给我锦囊"}
+              </Button>
+            </div>
+            {aiResult && (
+              <p className="text-xs leading-relaxed text-muted-foreground">{aiResult.tactic}</p>
+            )}
+            {aiError && (
+              <p className="text-[11px] leading-relaxed text-cat-blackhole/80">{aiError}</p>
+            )}
+            {!aiResult && !aiError && (
+              <p className="text-[11px] leading-relaxed text-subtle-foreground">
+                基于当前任务，让 AI 给你一个开局动作 + 避坑提醒。
+              </p>
+            )}
           </div>
         )}
 
