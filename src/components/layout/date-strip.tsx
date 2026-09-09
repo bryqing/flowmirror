@@ -26,8 +26,12 @@ export function DateStrip() {
     for (let offset = -1; offset <= 5; offset++) {
       const d = new Date();
       d.setDate(d.getDate() + offset);
+      // 用本地时区拼日期 key，与 todayKey() / localDateKey() 保持一致；
+      // 绝不能用 toISOString()（UTC），否则在 GMT+8 凌晨会差一天导致筛选错位
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
       list.push({
-        key: d.toISOString().slice(0, 10),
+        key: `${d.getFullYear()}-${m}-${day}`,
         weekday: WEEKDAYS[d.getDay()],
         dayNum: d.getDate(),
         month: d.getMonth() + 1,

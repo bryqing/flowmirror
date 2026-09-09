@@ -129,8 +129,10 @@ export interface Thought {
   createdAt: string;
   /** 归属日 YYYY-MM-DD，用于按日归档回查 */
   date: string;
-  /** 可选标签，供未来同类灵感串联 */
+  /** 可选标签，供同类灵感串联与即时检索 */
   tags: string[];
+  /** 关联的待办任务 id（灵感已转任务时存在，用于展示状态徽标） */
+  taskId?: string;
 }
 
 export const CATEGORY_META: Record<

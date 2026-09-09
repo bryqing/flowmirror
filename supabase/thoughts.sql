@@ -12,6 +12,7 @@ create table if not exists public.thoughts (
   content text not null,                -- 原始想法
   ai_expansion text not null default '', -- AI 拓展内容（维度拆解/反思提示/落地建议）
   tags text[] not null default '{}',    -- 可选标签
+  task_id uuid references public.tasks(id) on delete set null, -- 灵感转任务后的关联（可空）
 
   date text not null default to_char(now(), 'YYYY-MM-DD'),  -- 归属日，按日归档
   created_at timestamptz not null default now(),
@@ -49,3 +50,12 @@ begin
   raise notice 'thoughts 表已就绪：RLS 已启用，已加入 Realtime。';
 end;
 $$;
+
+-- ============================================================
+-- 增量迁移：灵感转待办（Spark -> Task）关联字段
+-- 若 thoughts 表已建（缺少 task_id 列），单独运行以下两句即可
+-- ============================================================
+alter table public.thoughts
+  add column if not exists task_id uuid references public.tasks(id) on delete set null;
+
+comment on column public.thoughts.task_id is '灵感转任务后的关联任务 id（可空，删除任务时置空）';

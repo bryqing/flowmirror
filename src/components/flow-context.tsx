@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { MicroReview, ParsedCommand, Task } from "@/lib/types";
+import type { MicroReview, ParsedCommand, Task, TaskCategory } from "@/lib/types";
 import { TODAY_TASKS } from "@/lib/mock-data";
 import { uid } from "@/lib/utils";
 import {
@@ -29,7 +29,6 @@ import {
   loadQueue,
   enqueue,
   dequeue,
-  clearQueue,
   type PendingOp,
 } from "@/lib/offline-store";
 
@@ -61,6 +60,8 @@ interface FlowContextValue {
   closeReview: () => void;
   submitReview: (id: string, review: Omit<MicroReview, "id" | "createdAt">) => void;
   executeCommand: (cmd: ParsedCommand) => void;
+  /** 直接新增任务到指定象限，返回新任务 id（供「灵感转待办」等场景复用） */
+  addTask: (title: string, category: TaskCategory) => Promise<string>;
   unfreeze: () => void;
   openDetail: (id: string) => void;
   closeDetail: () => void;
@@ -431,6 +432,47 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     [pushToast, tasks]
   );
 
+  // 直接新增任务到指定象限（灵感转待办、快速入格等场景复用），返回新任务 id
+  const addTask = useCallback(
+    async (title: string, category: TaskCategory): Promise<string> => {
+      const task: Task = {
+        id: uid("task"),
+        title,
+        status: "pending",
+        category,
+        plannedDuration: 50,
+        timeSlices: [],
+        microReviews: [],
+        insights: [],
+        sops: ["先拆出第一步最小动作", "定时器 25 分钟，先跑一个番茄钟", "完成比完美重要"],
+        pitfalls: [],
+      };
+      setTasks((prev) => {
+        const next = [...prev, task].sort(byScheduledTime);
+        saveSnapshot(next);
+        return next;
+      });
+      if (isRemoteMode()) {
+        const op: PendingOp = { type: "insert", task, dateKey: todayKey(), clientId: `ins-${task.id}` };
+        enqueue(op);
+        const saved = await supabaseTaskRepo.insertTask(task, todayKey());
+        if (saved) {
+          dequeue(op.clientId);
+          suppressRemoteRef.current = true;
+          setTasks((prev) => {
+            const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
+            saveSnapshot(next);
+            return next;
+          });
+          setTimeout(() => { suppressRemoteRef.current = false; }, 500);
+          return saved.id;
+        }
+      }
+      return task.id;
+    },
+    []
+  );
+
   const unfreeze = useCallback(() => {
     setCareMode(false);
     setTasks((prev) => {
@@ -475,6 +517,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     closeReview,
     submitReview,
     executeCommand,
+    addTask,
     unfreeze,
     openDetail,
     closeDetail,
