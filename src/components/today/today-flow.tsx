@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Flame, Snowflake, Swords } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { Button } from "@/components/ui/button";
@@ -7,9 +8,17 @@ import { CommandBar } from "@/components/layout/command-bar";
 import { DateStrip } from "@/components/layout/date-strip";
 import { MorningAnchor } from "./morning-anchor";
 import { TaskQuadrants } from "./task-quadrants";
+import { GlobalDispatchPanel } from "./global-dispatch-panel";
 
 export function TodayFlow() {
   const { tasks, careMode, unfreeze } = useFlow();
+  // 计数依赖 tasks 状态，而 tasks 在客户端会从本地快照/远程同步后变化，
+  // SSR 与客户端首帧数量可能不一致。挂载后再渲染计数，避免 Hydration 警告。
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+  }, []);
 
   const activeCount = tasks.filter((t) => t.status === "pending" || t.status === "in-progress").length;
   const doneCount = tasks.filter((t) => t.status === "done").length;
@@ -23,9 +32,12 @@ export function TodayFlow() {
           今日战局
           <span className="font-normal text-subtle-foreground">Today&apos;s Flow · 主战场</span>
         </h3>
-        <p className="text-[11px] text-subtle-foreground">
-          {doneCount} 完成 · {activeCount} 待处理
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-[11px] text-subtle-foreground">
+            {mounted ? `${doneCount} 完成 · ${activeCount} 待处理` : "…"}
+          </p>
+          <GlobalDispatchPanel />
+        </div>
       </div>
 
       {/* 顶部：自然语言调度输入框（静态通栏一行，不悬浮、不插入网格）+ 横向日期胶囊条 */}

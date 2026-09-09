@@ -71,14 +71,9 @@ interface FlowContextValue {
 const FlowContext = createContext<FlowContextValue | null>(null);
 
 export function FlowProvider({ children }: { children: ReactNode }) {
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    // 离线兜底：优先读取本地快照，其次 mock
-    if (typeof window !== "undefined") {
-      const snap = loadSnapshot();
-      if (snap && snap.length > 0) return snap;
-    }
-    return TODAY_TASKS;
-  });
+  // 关键：初始状态必须与 SSR 完全一致（一律 TODAY_TASKS）。
+  // 本地快照的读取放在挂载后的 useEffect 中异步触发，避免 SSR 与客户端首帧水合差异。
+  const [tasks, setTasks] = useState<Task[]>(TODAY_TASKS);
   const [careMode, setCareMode] = useState(false);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
@@ -101,6 +96,18 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4600);
+  }, []);
+
+  // ---- 挂载后异步读取本地快照（离线兜底）----
+  // 仅在客户端、且尚未登录时生效；登录态下由下方 Supabase 拉取远程数据覆盖。
+  // 放在 effect 中异步触发，确保 SSR 首帧与客户端首帧都渲染 mock，彻底斩断水合差异。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const snap = loadSnapshot();
+    if (snap && snap.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTasks(snap);
+    }
   }, []);
 
   // ---- Supabase 初始化：登录态检测 + 拉取远程任务 + Realtime 订阅 + 离线回退 ----

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Check, ChevronRight, Play, Snowflake } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { CATEGORY_META, type Task, type TaskCategory } from "@/lib/types";
@@ -23,6 +24,14 @@ const RING_COLORS: Record<TaskCategory, string> = {
 
 export function TaskQuadrants() {
   const { tasks, openDetail, completeTask } = useFlow();
+
+  // mounted：SSR 与客户端首帧渲染占位，挂载后再展示动态任务数据，
+  // 避免任务列表（本地快照/远程）在首帧与 SSR 不一致导致 Hydration 报错。
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+  }, []);
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -49,29 +58,40 @@ export function TaskQuadrants() {
               <span className={cn("size-2 rounded-full", meta.dot, active && "animate-pulse-dot")} />
               <p className={cn("text-xs font-semibold tracking-tight", meta.text)}>{meta.label}</p>
               <span className="rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10px] text-zinc-400">
-                {list.length}
+                {mounted ? list.length : 0}
               </span>
               <span className="ml-auto font-mono text-[10px] text-zinc-400">
-                {total > 0 ? fmtDuration(total) : hint}
+                {mounted ? (total > 0 ? fmtDuration(total) : hint) : hint}
               </span>
-              <RingProgress value={progress} color={RING_COLORS[category]} done={doneCount} total={list.length} />
+              <RingProgress
+                value={mounted ? progress : 0}
+                color={RING_COLORS[category]}
+                done={mounted ? doneCount : 0}
+                total={mounted ? list.length : 0}
+              />
             </header>
 
             {/* 任务芯片：条目间 space-y-2.5 呼吸间距 */}
             <div className="flex flex-1 flex-col gap-2.5">
-              {list.length === 0 && (
+              {!mounted && (
+                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] py-6 text-[11px] text-zinc-500">
+                  …
+                </p>
+              )}
+              {mounted && list.length === 0 && (
                 <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] py-6 text-[11px] text-zinc-500">
                   暂无安排
                 </p>
               )}
-              {list.map((task) => (
-                <TaskChip
-                  key={task.id}
-                  task={task}
-                  onOpen={() => openDetail(task.id)}
-                  onComplete={() => completeTask(task.id)}
-                />
-              ))}
+              {mounted &&
+                list.map((task) => (
+                  <TaskChip
+                    key={task.id}
+                    task={task}
+                    onOpen={() => openDetail(task.id)}
+                    onComplete={() => completeTask(task.id)}
+                  />
+                ))}
             </div>
           </section>
         );
