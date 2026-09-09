@@ -35,7 +35,7 @@ export function SyncStatus() {
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "pointer-events-auto flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px]",
+          "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px]",
           "border backdrop-blur-md transition-colors",
           synced
             ? "border-cat-rest/25 bg-cat-rest/10 text-cat-rest"

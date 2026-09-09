@@ -11,11 +11,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * 返回 { supported, listening, error, start, stop }
  */
 export function useSpeech(onResult: (text: string) => void) {
-  // 惰性初始化检测支持度（兼容 webkit 前缀），避免 setState-in-effect
-  const [supported] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition);
-  });
+  // 支持度初值固定为 false：SSR 与客户端首帧一致（都 false），挂载后再异步检测。
+  // 这是 React 18/19 官方支持的 hydration 后更新模式，不会触发 Hydration 报错。
+  const [supported, setSupported] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSupported(Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition));
+  }, []);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

@@ -36,15 +36,15 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* 多端同步状态（固定右上角，非侵入式） */}
       <div
-        className="pointer-events-none fixed right-4 z-50 flex items-center"
+        className="fixed right-4 z-50 flex items-center"
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
       >
         <SyncStatus />
       </div>
 
-      {/* 深夜深潜入口（固定左上角，仅烛光模式显示） */}
+      {/* 深夜深潜入口（固定左上角，开发模式常驻 / 生产环境烛光模式显示） */}
       <div
-        className="pointer-events-none fixed left-4 z-50 flex items-center"
+        className="fixed left-4 z-50 flex items-center"
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
       >
         <DeepDivePanel />

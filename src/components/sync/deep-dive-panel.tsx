@@ -21,6 +21,10 @@ interface Msg {
 export function DeepDivePanel() {
   const { candleMode } = useFlow();
   const [open, setOpen] = useState(false);
+
+  // 入口常驻：开发模式不受 23:00–1:00 时间限制；生产环境遵循深夜烛光语义
+  const isDev = process.env.NODE_ENV !== "production";
+  const showEntry = isDev || candleMode;
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -52,18 +56,20 @@ export function DeepDivePanel() {
 
   return (
     <>
-      {/* 入口：仅在烛光模式显示，静默低调 */}
-      {candleMode && (
+      {/* 入口：开发模式常驻，生产环境遵循深夜烛光时间；静默低调 */}
+      {showEntry && (
         <button
           type="button"
           onClick={() => setOpen(true)}
           aria-label="深夜深潜"
           className={cn(
-            "pointer-events-auto flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px]",
+            "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px]",
             "border backdrop-blur-md transition-all",
             open
               ? "opacity-0"
-              : "border-candle/25 bg-candle/10 text-candle hover:bg-candle/15"
+              : candleMode
+                ? "border-candle/25 bg-candle/10 text-candle hover:bg-candle/15"
+                : "border-white/10 bg-white/[0.04] text-muted-foreground hover:bg-white/[0.08]"
           )}
         >
           <Moon className="size-3.5" />

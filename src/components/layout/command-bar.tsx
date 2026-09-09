@@ -12,13 +12,17 @@ export function CommandBar() {
   const [value, setValue] = useState("");
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // 平台探测：初值固定 false，SSR 与客户端首帧一致；挂载后再异步探测
   const [isMac, setIsMac] = useState(false);
 
   // 语音输入：实时转录到输入框
+  // 注：supported 由 useSpeech 内部用「初值 false + useEffect 异步探测」做水合安全：
+  // SSR 与客户端首帧都不渲染语音按钮，挂载后再补渲染，不产生 Hydration 报错
   const { supported: speechSupported, listening, error: speechError, start: startSpeech, stop: stopSpeech } =
     useSpeech((text) => setValue(text));
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform + navigator.userAgent));
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -86,7 +90,7 @@ export function CommandBar() {
             <span className="kbd">K</span>
           </span>
 
-          {/* 语音输入：仅在支持时显示 */}
+          {/* 语音输入：仅在浏览器支持时显示 */}
           {speechSupported && (
             <button
               onClick={listening ? stopSpeech : startSpeech}
