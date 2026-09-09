@@ -1,17 +1,18 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { chat, MODEL_PRO, isDeepSeekConfigured, type ChatMessage } from "@/lib/deepseek";
+import type { NextRequest } from "next/server";
+import { chatStream, MODEL_PRO, isDeepSeekConfigured, type ChatMessage } from "@/lib/deepseek";
 
 /**
- * 深夜深潜：开放式认知对话（非流式单轮版，前端按轮次调用）
+ * 深夜深潜：开放式认知对话（SSE 流式输出）
  * POST /api/ai/deep-dive
  * body: { messages: [{ role: "system"|"user"|"assistant", content }] }
+ * 响应：text/event-stream，逐段推送 `data: {text}` 增量
  * 用 deepseek-v4-pro 强化推理，适合深夜低刺激场景下的认知深潜
  */
 export async function POST(request: NextRequest) {
   if (!isDeepSeekConfigured()) {
-    return NextResponse.json(
-      { error: "DeepSeek 未配置（缺少 DEEPSEEK_API_KEY）" },
-      { status: 503 }
+    return new Response(
+      JSON.stringify({ error: "DeepSeek 未配置（缺少 DEEPSEEK_API_KEY）" }),
+      { status: 503, headers: { "Content-Type": "application/json" } }
     );
   }
 
@@ -20,11 +21,17 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     messages = body.messages;
   } catch {
-    return NextResponse.json({ error: "请求体需为 JSON" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "请求体需为 JSON" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   if (!Array.isArray(messages) || messages.length === 0) {
-    return NextResponse.json({ error: "messages 不能为空" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "messages 不能为空" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   // 强制注入系统人设（如果调用方未提供）
@@ -40,16 +47,41 @@ export async function POST(request: NextRequest) {
         ...messages,
       ];
 
-  try {
-    const reply = await chat(full, {
-      model: MODEL_PRO,
-      temperature: 0.8,
-      maxTokens: 800,
-    });
+  // 以 SSE 流式返回
+  const encoder = new TextEncoder();
 
-    return NextResponse.json({ reply });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "未知错误";
-    return NextResponse.json({ error: `深潜对话失败：${message}` }, { status: 502 });
-  }
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (chunk: string) => {
+        controller.enqueue(encoder.encode(chunk));
+      };
+
+      try {
+        for await (const delta of chatStream(full, {
+          model: MODEL_PRO,
+          temperature: 0.8,
+          maxTokens: 800,
+        })) {
+          // 每个增量打包成 SSE 数据帧
+          send(`data: ${JSON.stringify({ text: delta })}\n\n`);
+        }
+        // 结束信号
+        send(`data: ${JSON.stringify({ done: true })}\n\n`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "未知错误";
+        send(`data: ${JSON.stringify({ error: message })}\n\n`);
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

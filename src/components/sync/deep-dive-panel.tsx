@@ -5,6 +5,7 @@ import { Moon, Send, Loader2, X } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
+import { useAiStream } from "@/lib/use-ai-stream";
 import { cn } from "@/lib/utils";
 
 interface Msg {
@@ -22,40 +23,30 @@ export function DeepDivePanel() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // 流式对话：reply 是正在逐字生成的最新助手回复
+  const { reply, streaming, error, send: streamSend } = useAiStream(
+    "/api/ai/deep-dive",
+    () => bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  );
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, streaming, reply]);
 
   const send = async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || streaming) return;
     setInput("");
-    setError(null);
 
     const next: Msg[] = [...messages, { role: "user", content: text }];
     setMessages(next);
-    setLoading(true);
 
-    try {
-      const res = await fetch("/api/ai/deep-dive", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? `请求失败（HTTP ${res.status}）`);
-      } else {
-        setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "网络错误");
-    } finally {
-      setLoading(false);
+    const full = await streamSend({ messages: next });
+    if (full) {
+      // 流式结束后，把最终完整回复写入消息列表
+      setMessages((prev) => [...prev, { role: "assistant", content: full }]);
     }
   };
 
@@ -112,11 +103,20 @@ export function DeepDivePanel() {
               </div>
             ))}
 
-            {loading && (
+            {streaming && (
               <div className="flex justify-start">
-                <div className="flex items-center gap-2 rounded-2xl bg-white/[0.05] px-3.5 py-2.5 text-xs text-subtle-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  正在思考…
+                <div className="max-w-[85%] rounded-2xl bg-white/[0.05] px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+                  {reply ? (
+                    <>
+                      {reply}
+                      <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-candle/70 align-middle" />
+                    </>
+                  ) : (
+                    <span className="flex items-center gap-2 text-subtle-foreground">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      正在思考…
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -142,10 +142,10 @@ export function DeepDivePanel() {
             <Button
               size="sm"
               onClick={send}
-              disabled={loading || !input.trim()}
+              disabled={streaming || !input.trim()}
               className="gap-1 bg-candle/90 text-background hover:bg-candle"
             >
-              {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+              {streaming ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
             </Button>
           </div>
 
