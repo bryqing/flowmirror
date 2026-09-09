@@ -54,6 +54,9 @@ interface FlowContextValue {
   userEmail: string | null;
   signInWithEmail: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** 当前选中日期 key "YYYY-MM-DD"（联动日历回查灵感/历史） */
+  selectedDate: string;
+  setSelectedDate: (key: string) => void;
   completeTask: (id: string) => void;
   closeReview: () => void;
   submitReview: (id: string, review: Omit<MicroReview, "id" | "createdAt">) => void;
@@ -81,6 +84,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [synced, setSynced] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>(() => todayKey());
 
   // 远程写入开关：避免在 Realtime 回调里重复回写
   const suppressRemoteRef = useRef(false);
@@ -465,6 +469,8 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     userEmail,
     signInWithEmail,
     signOut,
+    selectedDate,
+    setSelectedDate,
     completeTask,
     closeReview,
     submitReview,

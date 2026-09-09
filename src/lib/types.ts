@@ -118,6 +118,21 @@ export type ParsedCommand =
   | { intent: "fuse"; summary: string }
   | { intent: "unknown"; summary: string };
 
+/** 灵感 / 思考流（Spark / Thought Stream）：随记闪念，不与执行任务混淆 */
+export interface Thought {
+  id: string;
+  /** 原始想法 */
+  content: string;
+  /** AI 拓展内容（维度拆解/反思提示/落地建议），未拓展为空串 */
+  aiExpansion: string;
+  /** 具体时间戳 ISO 字符串 */
+  createdAt: string;
+  /** 归属日 YYYY-MM-DD，用于按日归档回查 */
+  date: string;
+  /** 可选标签，供未来同类灵感串联 */
+  tags: string[];
+}
+
 export const CATEGORY_META: Record<
   TaskCategory,
   { label: string; tone: string; text: string; bg: string; border: string; dot: string }

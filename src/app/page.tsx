@@ -4,6 +4,7 @@ import { Toaster } from "@/components/layout/command-bar";
 import { YesterdayMirror } from "@/components/mirror/yesterday-mirror";
 import { TodayFlow } from "@/components/today/today-flow";
 import { TimeHeatmap } from "@/components/heatmap/time-heatmap";
+import { ThoughtStream } from "@/components/thoughts/thought-stream";
 import { TaskDetailDrawer } from "@/components/today/task-detail-drawer";
 import { ReviewDrawer } from "@/components/review/review-drawer";
 
@@ -19,8 +20,11 @@ export default function Home() {
               顶部自然语言调度吸附条 + 日期胶囊条 → 晨间金句 → 2x2 四象限大盘 */}
           <TodayFlow />
 
-          {/* 第三层（最底）：今日时间分布 · 24小时黑洞热力大盘 */}
+          {/* 第三层：今日时间分布 · 24小时黑洞热力大盘 */}
           <TimeHeatmap />
+
+          {/* 第四层：灵感与思考流 —— 随记闪念 + AI 拓展 + 按日回查 */}
+          <ThoughtStream />
         </main>
 
         {/* 抽屉层：任务详情 / 微复盘 */}

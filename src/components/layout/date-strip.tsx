@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { CalendarDays } from "lucide-react";
+import { useFlow } from "@/components/flow-context";
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
@@ -16,9 +17,9 @@ interface DayCell {
   isToday: boolean;
 }
 
-/** 横向日期胶囊条：以今天为中心，左含昨日，右展未来 5 天 */
+/** 横向日期胶囊条：以今天为中心，左含昨日，右展未来 5 天；点击切换全局选中日期 */
 export function DateStrip() {
-  const [selected, setSelected] = useState(0);
+  const { selectedDate, setSelectedDate } = useFlow();
 
   const days = useMemo<DayCell[]>(() => {
     const list: DayCell[] = [];
@@ -45,12 +46,12 @@ export function DateStrip() {
       </span>
 
       <div className="flex flex-1 items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {days.map((d, i) => {
-          const active = selected === i;
+        {days.map((d) => {
+          const active = selectedDate === d.key;
           return (
             <button
               key={d.key}
-              onClick={() => setSelected(i)}
+              onClick={() => setSelectedDate(d.key)}
               className={cn(
                 "flex shrink-0 flex-col items-center rounded-xl px-3 py-1.5 transition-all duration-200",
                 active
@@ -83,7 +84,7 @@ export function DateStrip() {
       </div>
 
       <span className="hidden shrink-0 pr-1 text-[10px] text-subtle-foreground md:block">
-        历史/未来日期视图即将上线
+        点击日期回看灵感
       </span>
     </div>
   );

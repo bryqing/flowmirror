@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Orbit, Sparkles } from "lucide-react";
+import { ArrowRight, Mic, Orbit, Sparkles } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { COMMAND_SUGGESTIONS, parseCommand } from "@/lib/nlp";
+import { useSpeech } from "@/lib/use-speech";
 import { cn } from "@/lib/utils";
 
 export function CommandBar() {
@@ -12,6 +13,10 @@ export function CommandBar() {
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isMac, setIsMac] = useState(false);
+
+  // 语音输入：实时转录到输入框
+  const { supported: speechSupported, listening, error: speechError, start: startSpeech, stop: stopSpeech } =
+    useSpeech((text) => setValue(text));
 
   useEffect(() => {
     setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform + navigator.userAgent));
@@ -80,6 +85,26 @@ export function CommandBar() {
             <span className="kbd">{isMac ? "⌘" : "Ctrl"}</span>
             <span className="kbd">K</span>
           </span>
+
+          {/* 语音输入：仅在支持时显示 */}
+          {speechSupported && (
+            <button
+              onClick={listening ? stopSpeech : startSpeech}
+              aria-label={listening ? "停止录音" : "语音输入"}
+              className={cn(
+                "relative flex size-7 shrink-0 items-center justify-center rounded-lg transition-all",
+                listening
+                  ? "bg-cat-blackhole/20 text-cat-blackhole"
+                  : "bg-white/[0.07] text-muted-foreground hover:bg-cat-deep/20 hover:text-cat-deep"
+              )}
+            >
+              {listening && (
+                <span className="absolute inset-0 rounded-lg bg-cat-blackhole/40 animate-ping" />
+              )}
+              <Mic className={cn("relative size-3.5", listening && "animate-pulse")} />
+            </button>
+          )}
+
           <button
             onClick={submit}
             aria-label="执行指令"
@@ -108,6 +133,14 @@ export function CommandBar() {
             </div>
           </div>
         </div>
+
+        {/* 语音错误提示 */}
+        {speechError && (
+          <p className="mt-2 flex items-center gap-1.5 px-1 text-[11px] text-cat-blackhole/80">
+            <Mic className="size-3" />
+            {speechError}
+          </p>
+        )}
 
         {/* 快捷示例（移动端常驻，桌面端聚焦时显示） */}
         <div
