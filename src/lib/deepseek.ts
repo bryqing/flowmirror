@@ -89,3 +89,52 @@ export async function* chatStream(
     if (delta) yield delta;
   }
 }
+
+/**
+ * 把 chatStream 的结果包装成 SSE Response（text/event-stream）。
+ * 每个增量一帧 `data: {"text": ...}`，结尾一帧 `data: {"done": true}`，
+ * 出错时一帧 `data: {"error": ...}`。
+ * 供所有流式 Route Handler 复用，避免重复写 ReadableStream 样板。
+ */
+export function toSseResponse(
+  messages: ChatMessage[],
+  opts: DeepSeekOptions = {}
+): Response {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (payload: unknown) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+      };
+      try {
+        for await (const delta of chatStream(messages, opts)) {
+          send({ text: delta });
+        }
+        send({ done: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "未知错误";
+        send({ error: message });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
+/** 未配置 key 时的统一 503 响应（JSON） */
+export function notConfiguredResponse(): Response {
+  return new Response(
+    JSON.stringify({ error: "DeepSeek 未配置（缺少 DEEPSEEK_API_KEY）" }),
+    { status: 503, headers: { "Content-Type": "application/json" } }
+  );
+}

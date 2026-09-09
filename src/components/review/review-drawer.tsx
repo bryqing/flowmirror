@@ -25,7 +25,7 @@ export function ReviewDrawer() {
   const [lessonTags, setLessonTags] = useState<string[]>([]);
   const [note, setNote] = useState("");
 
-  const { loading: aiLoading, result: aiResult, error: aiError, run: runProbe } = useAi<{ probes: string }>("/api/ai/review-probe");
+  const { loading: aiLoading, result: aiResult, error: aiError, run: runProbe } = useAi("/api/ai/review-probe");
 
   /* 每次打开新任务时重置 */
   useEffect(() => {
@@ -130,7 +130,7 @@ export function ReviewDrawer() {
             </Button>
           </div>
           {aiResult && (
-            <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{aiResult.probes}</p>
+            <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{aiResult}</p>
           )}
           {aiError && (
             <p className="text-[11px] leading-relaxed text-cat-blackhole/80">{aiError}</p>

@@ -33,7 +33,7 @@ export function TaskDetailDrawer() {
   const [totalSeconds, setTotalSeconds] = useState(25 * 60);
   const finishedRef = useRef(false);
 
-  const { loading: aiLoading, result: aiResult, error: aiError, run: runTactic } = useAi<{ tactic: string }>("/api/ai/tactic");
+  const { loading: aiLoading, result: aiResult, error: aiError, run: runTactic } = useAi("/api/ai/tactic");
 
   const isBlackhole = detailTask?.category === "blackhole";
   const done = detailTask?.status === "done";
@@ -216,7 +216,7 @@ export function TaskDetailDrawer() {
               </Button>
             </div>
             {aiResult && (
-              <p className="text-xs leading-relaxed text-muted-foreground">{aiResult.tactic}</p>
+              <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{aiResult}</p>
             )}
             {aiError && (
               <p className="text-[11px] leading-relaxed text-cat-blackhole/80">{aiError}</p>

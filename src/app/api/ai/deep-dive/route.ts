@@ -1,5 +1,11 @@
 import type { NextRequest } from "next/server";
-import { chatStream, MODEL_PRO, isDeepSeekConfigured, type ChatMessage } from "@/lib/deepseek";
+import {
+  MODEL_PRO,
+  isDeepSeekConfigured,
+  notConfiguredResponse,
+  toSseResponse,
+  type ChatMessage,
+} from "@/lib/deepseek";
 
 /**
  * 深夜深潜：开放式认知对话（SSE 流式输出）
@@ -9,12 +15,7 @@ import { chatStream, MODEL_PRO, isDeepSeekConfigured, type ChatMessage } from "@
  * 用 deepseek-v4-pro 强化推理，适合深夜低刺激场景下的认知深潜
  */
 export async function POST(request: NextRequest) {
-  if (!isDeepSeekConfigured()) {
-    return new Response(
-      JSON.stringify({ error: "DeepSeek 未配置（缺少 DEEPSEEK_API_KEY）" }),
-      { status: 503, headers: { "Content-Type": "application/json" } }
-    );
-  }
+  if (!isDeepSeekConfigured()) return notConfiguredResponse();
 
   let messages: ChatMessage[];
   try {
@@ -47,41 +48,5 @@ export async function POST(request: NextRequest) {
         ...messages,
       ];
 
-  // 以 SSE 流式返回
-  const encoder = new TextEncoder();
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (chunk: string) => {
-        controller.enqueue(encoder.encode(chunk));
-      };
-
-      try {
-        for await (const delta of chatStream(full, {
-          model: MODEL_PRO,
-          temperature: 0.8,
-          maxTokens: 800,
-        })) {
-          // 每个增量打包成 SSE 数据帧
-          send(`data: ${JSON.stringify({ text: delta })}\n\n`);
-        }
-        // 结束信号
-        send(`data: ${JSON.stringify({ done: true })}\n\n`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "未知错误";
-        send(`data: ${JSON.stringify({ error: message })}\n\n`);
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
-  });
+  return toSseResponse(full, { model: MODEL_PRO, temperature: 0.8, maxTokens: 800 });
 }
