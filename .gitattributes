@@ -1,0 +1,11 @@
+# 统一换行符，避免 Windows CRLF 在 Linux 构建机上引发问题
+* text=auto
+
+# 二进制文件不转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

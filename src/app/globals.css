@@ -1,0 +1,359 @@
+@import "tailwindcss";
+
+/* ============================================================
+   FlowMirror · 掌控时间黑洞 — Design Tokens (Tailwind v4)
+   Linear / Raycast 风格：极暗背景 + 毛玻璃 + 微弱发光边框
+   ============================================================ */
+
+@theme {
+  /* 基础语义色 —— 深空蓝黑夜色（非纯黑） */
+  --color-background: #0b0e14;
+  --color-surface: #10141d;
+  --color-elevated: #181d2a;
+  --color-foreground: #f4f5f8;
+  --color-muted-foreground: #9aa0b0;
+  --color-subtle-foreground: #626a7d;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.13);
+  --color-input: rgba(255, 255, 255, 0.1);
+  --color-ring: rgba(103, 232, 249, 0.4);
+
+  --color-primary: #f4f4f5;
+  --color-primary-foreground: #09090b;
+
+  /* 四大时间板块配色（数据可视化语义色） */
+  --color-cat-deep: #67e8f9;       /* 深度工作 — 冰青 */
+  --color-cat-chore: #a5b4fc;      /* 日常杂务 — 靛蓝 */
+  --color-cat-blackhole: #fb7185;  /* 娱乐黑洞 — 警示玫瑰 */
+  --color-cat-rest: #6ee7b7;       /* 休息恢复 — 翡翠 */
+  --color-candle: #fbbf24;         /* 深夜烛光 — 琥珀 */
+
+  /* PWA / iOS 安全区令牌 —— 全局可引用 */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+
+  /* 字体：Geist 负责拉丁文，中文走系统黑体栈 */
+  --font-sans:
+    var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+  --font-mono:
+    var(--font-geist-mono), "SF Mono", "JetBrains Mono", "Cascadia Code",
+    Consolas, "Courier New", monospace;
+
+  /* 动效曲线 */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ---------------- 基础 ---------------- */
+
+html {
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: rgba(103, 232, 249, 0.25);
+  color: #fff;
+}
+
+/* 极简滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* ---------------- 氛围背景 ---------------- */
+
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.atmosphere::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    /* 顶部环境光源：大半径微弱冷色渐变光晕 */
+    radial-gradient(1000px circle at 50% -20%, rgba(56, 189, 248, 0.08), rgba(99, 102, 241, 0.05) 40%, transparent 80%),
+    /* 底部极淡冷反光，避免死黑 */
+    radial-gradient(900px circle at 50% 118%, rgba(30, 41, 82, 0.18), transparent 70%);
+}
+.atmosphere::after {
+  /* 细腻噪点，消除纯色塑料感 */
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+/* 深夜烛光模式（23:00 - 01:00 自动开启） */
+.candle-mode .atmosphere::before {
+  background:
+    radial-gradient(56rem 34rem at 50% -10%, rgba(251, 191, 36, 0.1), transparent 62%),
+    radial-gradient(64rem 46rem at 50% 120%, rgba(120, 72, 20, 0.22), transparent 66%);
+}
+.candle-mode {
+  --color-ring: rgba(251, 191, 36, 0.4);
+}
+
+/* ---------------- 毛玻璃组件层 ---------------- */
+
+@layer components {
+  /* 标准透光毛玻璃卡片：#131722/60 + blur-xl + white/8 微边框 + 统一柔影（悬浮半通透） */
+  .glass {
+    background: rgba(19, 23, 34, 0.6);
+    backdrop-filter: blur(24px) saturate(1.4);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    transition:
+      background-color 0.2s ease,
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+  .glass:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(22, 27, 40, 0.8);
+  }
+
+  /* 更强磨砂（浮层 / 命令栏 / 抽屉）：高不透明，内容不可穿透 */
+  .glass-strong {
+    background: rgba(19, 23, 34, 0.92);
+    backdrop-filter: blur(28px) saturate(1.5);
+    -webkit-backdrop-filter: blur(28px) saturate(1.5);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.5),
+      0 2px 8px rgba(0, 0, 0, 0.3);
+    transition:
+      background-color 0.2s ease,
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+  .glass-strong:hover {
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+
+  /* 微弱发光边框（悬停 / 聚焦时） */
+  .glow-edge {
+    transition:
+      border-color 0.35s var(--ease-spring),
+      box-shadow 0.35s var(--ease-spring),
+      transform 0.35s var(--ease-spring);
+  }
+  .glow-edge:hover {
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+      0 0 0 1px rgba(255, 255, 255, 0.04),
+      0 16px 48px -18px rgba(0, 0, 0, 0.7);
+  }
+
+  /* 板块色发光描边 */
+  .glow-deep {
+      box-shadow: 0 0 24px -6px rgba(103, 232, 249, 0.35), inset 0 1px 0 0 rgba(255,255,255,0.06);
+  }
+  .glow-blackhole {
+      box-shadow: 0 0 24px -6px rgba(251, 113, 133, 0.4), inset 0 1px 0 0 rgba(255,255,255,0.06);
+  }
+  .glow-candle {
+      box-shadow: 0 0 28px -6px rgba(251, 191, 36, 0.45), inset 0 1px 0 0 rgba(255,255,255,0.06);
+  }
+
+  /* 昨日时间黑洞：统一透光磨砂底 + 深绯红冷光警示边框（警示但不刺眼） */
+  .hero-rose {
+      position: relative;
+      border: 1px solid rgba(251, 113, 133, 0.28);
+      background:
+        linear-gradient(180deg, rgba(251, 113, 133, 0.08), rgba(251, 113, 133, 0.02)),
+        rgba(19, 23, 34, 0.6);
+      backdrop-filter: blur(24px) saturate(1.4);
+      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+      box-shadow:
+        0 0 34px -14px rgba(251, 113, 133, 0.5),
+        0 4px 24px rgba(0, 0, 0, 0.4);
+      transition:
+        box-shadow 0.35s var(--ease-spring),
+        border-color 0.2s ease,
+        background-color 0.2s ease;
+  }
+  .hero-rose:hover {
+      border-color: rgba(251, 113, 133, 0.42);
+      background:
+        linear-gradient(180deg, rgba(251, 113, 133, 0.1), rgba(251, 113, 133, 0.03)),
+        rgba(22, 27, 40, 0.8);
+      box-shadow:
+        0 0 44px -12px rgba(251, 113, 133, 0.6),
+        0 4px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  /* 昨日记忆碎片：统一透光磨砂底 + 琥珀金→月光紫渐变描边（温润沉淀感） */
+  .hero-gold {
+      position: relative;
+      border: 1px solid transparent;
+      background:
+        linear-gradient(180deg, rgba(251, 191, 36, 0.06), rgba(165, 180, 252, 0.03)),
+        linear-gradient(rgba(19, 23, 34, 0.6), rgba(19, 23, 34, 0.6)) padding-box,
+        linear-gradient(135deg, rgba(251, 191, 36, 0.45), rgba(165, 180, 252, 0.28) 58%, rgba(251, 113, 133, 0.18)) border-box;
+      backdrop-filter: blur(24px) saturate(1.4);
+      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+      box-shadow:
+        0 0 34px -14px rgba(251, 191, 36, 0.4),
+        0 4px 24px rgba(0, 0, 0, 0.4);
+      transition:
+        box-shadow 0.35s var(--ease-spring),
+        background-color 0.2s ease;
+  }
+  .hero-gold:hover {
+      background:
+        linear-gradient(180deg, rgba(251, 191, 36, 0.08), rgba(165, 180, 252, 0.04)),
+        linear-gradient(rgba(22, 27, 40, 0.8), rgba(22, 27, 40, 0.8)) padding-box,
+        linear-gradient(135deg, rgba(251, 191, 36, 0.55), rgba(165, 180, 252, 0.36) 58%, rgba(251, 113, 133, 0.24)) border-box;
+      box-shadow:
+        0 0 46px -12px rgba(251, 191, 36, 0.5),
+        0 4px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  /* 键帽 */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.4rem;
+    border-radius: 0.4rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom-width: 2px;
+    background: rgba(255, 255, 255, 0.05);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--color-muted-foreground);
+  }
+}
+
+/* ---------------- 动效关键帧 ---------------- */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(48px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.06); }
+}
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.45); }
+  50%      { box-shadow: 0 0 0 6px rgba(251, 113, 133, 0); }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+
+.animate-fade-up    { animation: fade-up 0.7s var(--ease-spring) both; }
+.animate-fade-in    { animation: fade-in 0.4s ease both; }
+.animate-breathe    { animation: breathe 3.2s ease-in-out infinite; }
+.animate-pulse-dot  { animation: pulse-dot 1.6s ease-in-out infinite; }
+
+/* 抽屉进出场（移动端底部 / 桌面右侧） */
+.sheet-panel {
+  transition:
+    transform 0.32s var(--ease-spring),
+    opacity 0.32s var(--ease-spring);
+}
+.sheet-backdrop {
+  transition: opacity 0.3s ease;
+}
+.sheet-enter .sheet-backdrop { animation: backdrop-in 0.3s ease both; }
+.sheet-enter .sheet-panel-mobile  { animation: slide-up 0.38s var(--ease-spring) both; }
+.sheet-enter .sheet-panel-desktop { animation: slide-in-right 0.38s var(--ease-spring) both; }
+.sheet-exit .sheet-backdrop  { opacity: 0; }
+.sheet-exit .sheet-panel-mobile  { transform: translateY(100%); opacity: 0; }
+.sheet-exit .sheet-panel-desktop { transform: translateX(60px); opacity: 0; }
+
+/* 列表交错入场 */
+.stagger > * {
+  animation: fade-up 0.65s var(--ease-spring) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 0.04s; }
+.stagger > *:nth-child(2) { animation-delay: 0.1s; }
+.stagger > *:nth-child(3) { animation-delay: 0.16s; }
+.stagger > *:nth-child(4) { animation-delay: 0.22s; }
+.stagger > *:nth-child(5) { animation-delay: 0.28s; }
+.stagger > *:nth-child(6) { animation-delay: 0.34s; }
+.stagger > *:nth-child(7) { animation-delay: 0.4s; }
+.stagger > *:nth-child(8) { animation-delay: 0.46s; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------- PWA / iOS 安全区适配 ---------------- */
+
+/* iOS PWA standalone 模式下，body 默认会顶到屏幕边缘 —— 用 token 拉出安全区 */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+  }
+}
+
+/* 当 PWA 以 standalone / fullscreen 启动时，强制深冷夜底色，
+   避免原生白底闪烁一帧 */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  html, body {
+    background-color: #0b0e14;
+    overscroll-behavior-y: contain;
+  }
+  /* standalone 模式下让 body 自身承载背景，避免 atmosphere 透出原生白 */
+  html {
+    background-color: #0b0e14;
+  }
+}
