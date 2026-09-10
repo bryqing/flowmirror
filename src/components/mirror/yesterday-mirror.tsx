@@ -9,19 +9,29 @@ import {
   Lightbulb,
   Moon,
   Quote,
+  Search,
   Sparkles,
   Sunrise,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Sheet } from "@/components/ui/sheet";
+import { BlackholeDetailDrawer } from "./blackhole-detail-drawer";
 import { YESTERDAY_MIRROR } from "@/lib/mock-data";
 import { cn, fmtDuration } from "@/lib/utils";
 
 export function YesterdayMirror() {
   const m = YESTERDAY_MIRROR;
   const [fragmentsOpen, setFragmentsOpen] = useState(false);
+  // 黑洞溯源抽屉：focusIndex 为被点击的具体条目索引，null 表示从整卡进入
+  const [blackholeOpen, setBlackholeOpen] = useState(false);
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
   const pct = Math.round(m.completionRate * 100);
   const runaway = m.blackholeSlices.filter((s) => s.runaway);
+
+  const openBlackhole = (index: number | null) => {
+    setFocusIndex(index);
+    setBlackholeOpen(true);
+  };
 
   return (
     <section className="flex flex-col gap-4">
@@ -37,8 +47,13 @@ export function YesterdayMirror() {
 
       {/* 两张高对比英雄卡片：加高、舒展文字 */}
       <div className="grid gap-4 sm:grid-cols-2">
-        {/* 卡片一：昨日时间黑洞 */}
-        <article className="hero-rose animate-fade-up flex min-h-[17rem] flex-col rounded-2xl p-6 sm:p-7">
+        {/* 卡片一：昨日时间黑洞（整张可点击 → 失控溯源抽屉） */}
+        <button
+          type="button"
+          onClick={() => openBlackhole(null)}
+          className="hero-rose group animate-fade-up flex min-h-[17rem] cursor-pointer flex-col rounded-2xl p-6 text-left sm:p-7"
+          aria-label="打开昨日时间黑洞失控溯源详情"
+        >
           <div className="relative z-10 flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
               <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-cat-blackhole/30 bg-cat-blackhole/10">
@@ -51,9 +66,12 @@ export function YesterdayMirror() {
                 </p>
               </div>
             </div>
-            <span className="rounded-full border border-cat-blackhole/30 bg-cat-blackhole/10 px-2.5 py-1 text-[10px] text-cat-blackhole">
-              失控 {runaway.length} 段
-            </span>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="rounded-full border border-cat-blackhole/30 bg-cat-blackhole/10 px-2.5 py-1 text-[10px] text-cat-blackhole">
+                失控 {runaway.length} 段
+              </span>
+              <Search className="size-4 text-cat-blackhole/50 transition-transform duration-300 group-hover:scale-110" />
+            </div>
           </div>
 
           <p className="mt-6 font-mono text-[2.1rem] font-light leading-none tabular-nums tracking-tight text-cat-blackhole">
@@ -63,14 +81,45 @@ export function YesterdayMirror() {
 
           <ul className="mt-5 flex flex-1 flex-col gap-2.5 border-t border-cat-blackhole/15 pt-4">
             {m.blackholeSlices.map((s, i) => (
-              <li key={i} className="flex items-baseline gap-2.5 text-xs leading-relaxed">
-                <span className="shrink-0 font-mono text-[10px] text-cat-blackhole/80">
-                  {s.start}–{s.end}
-                </span>
-                <span className={cn("truncate", s.runaway ? "text-cat-blackhole" : "text-zinc-300")}>
-                  {s.label}
-                  {s.runaway && <span className="ml-1.5 rounded bg-cat-blackhole/15 px-1.5 py-px text-[10px]">失控段 60分钟</span>}
-                </span>
+              <li key={i}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openBlackhole(i);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openBlackhole(i);
+                    }
+                  }}
+                  className={cn(
+                    "-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-baseline gap-2.5 rounded-lg px-2 py-1 text-left text-xs leading-relaxed transition-colors",
+                    "hover:bg-cat-blackhole/[0.12]"
+                  )}
+                  aria-label={`查看「${s.label}」失控溯源`}
+                >
+                  <span className="shrink-0 font-mono text-[10px] text-cat-blackhole/80">
+                    {s.start}–{s.end}
+                  </span>
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate",
+                      s.runaway ? "text-cat-blackhole" : "text-zinc-300"
+                    )}
+                  >
+                    {s.label}
+                    {s.runaway && (
+                      <span className="ml-1.5 rounded bg-cat-blackhole/15 px-1.5 py-px text-[10px]">
+                        失控段 60分钟
+                      </span>
+                    )}
+                  </span>
+                  <ArrowUpRight className="size-3 shrink-0 text-cat-blackhole/40 opacity-0 transition-opacity group-hover:opacity-100" />
+                </div>
               </li>
             ))}
           </ul>
@@ -79,7 +128,11 @@ export function YesterdayMirror() {
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
             {m.blackholeComment}
           </p>
-        </article>
+
+          <p className="mt-3 text-center text-[11px] text-cat-blackhole/60 transition-colors group-hover:text-cat-blackhole">
+            点击查看失控溯源 · AI 生成今日保护方案 →
+          </p>
+        </button>
 
         {/* 卡片二：昨日记忆碎片（整张可点击） */}
         <button
@@ -222,6 +275,14 @@ export function YesterdayMirror() {
           </div>
         </div>
       </Sheet>
+
+      {/* 黑洞溯源抽屉：失控时段明细 + AI 保护方案 */}
+      <BlackholeDetailDrawer
+        open={blackholeOpen}
+        mirror={m}
+        focusIndex={focusIndex}
+        onClose={() => setBlackholeOpen(false)}
+      />
     </section>
   );
 }

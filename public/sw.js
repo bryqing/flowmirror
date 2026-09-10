@@ -7,14 +7,14 @@
  *
  * 缓存版本升级：只改 CACHE_VERSION，旧 cache 会被自动清掉
  */
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v3";
 const SHELL_CACHE = `flowmirror-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `flowmirror-runtime-${CACHE_VERSION}`;
 
 // 预缓存 App Shell（核心静态资源 + 关键页面）
 const PRECACHE_URLS = [
   "/",
-  "/manifest.webmanifest",
+  "/manifest.json",
   "/icon-192.png",
   "/icon-512.png",
   "/icon-maskable-192.png",
@@ -63,6 +63,11 @@ self.addEventListener("fetch", (event) => {
   // 跨域：放行（不要替浏览器缓存第三方，避免 CORS / Opaque 污染）
   if (url.origin !== self.location.origin) return;
 
+  // 开发服务器资源带 ?ts= 时间戳签名，每次请求都会变。
+  // 一旦被缓存，下次导航拿到的旧 shell 会引用已失效的包 → 页面可见但无法交互。
+  // 因此这类请求一律放行，交给浏览器直连网络。
+  if (url.searchParams.has("ts")) return;
+
   // 同源导航（HTML 文档）：network-first，回退到缓存首页骨架
   if (req.mode === "navigate") {
     event.respondWith(networkFirstNavigation(req));
@@ -79,10 +84,18 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(req).catch(async () => {
       const cached = await caches.match(req);
-      return cached || Response.error();
+      return cached || offlineResponse();
     })
   );
 });
+
+/** 缓存与网络均不可用时的显式 504（比 Response.error() 更易在 DevTools 中定位） */
+function offlineResponse() {
+  return new Response("", {
+    status: 504,
+    statusText: "FlowMirror offline: resource unavailable",
+  });
+}
 
 async function networkFirstNavigation(req) {
   try {
@@ -113,13 +126,13 @@ async function staleWhileRevalidate(req) {
       return res;
     })
     .catch(() => null);
-  return cached || (await networkPromise) || Response.error();
+  return cached || (await networkPromise) || offlineResponse();
 }
 
 function isStaticAsset(url) {
   return (
     url.pathname.startsWith("/_next/static/") ||
-    url.pathname === "/manifest.webmanifest" ||
+    url.pathname === "/manifest.json" ||
     url.pathname.startsWith("/icon") ||
     /\.(png|svg|ico|webp|woff2?|css|js)$/i.test(url.pathname)
   );

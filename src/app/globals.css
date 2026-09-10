@@ -299,6 +299,18 @@ body {
 .animate-breathe    { animation: breathe 3.2s ease-in-out infinite; }
 .animate-pulse-dot  { animation: pulse-dot 1.6s ease-in-out infinite; }
 
+/* 微光骨架屏：用于 AI 生成中的占位（晨间心锚等） */
+.skeleton-line {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.11) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+
 /* 抽屉进出场（移动端底部 / 桌面右侧） */
 .sheet-panel {
   transition:

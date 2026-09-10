@@ -52,6 +52,10 @@ interface FlowContextValue {
   /** 当前登录用户邮箱（未登录为 null） */
   userEmail: string | null;
   signInWithEmail: (email: string) => Promise<void>;
+  /** 邮箱 + 密码登录（返回是否成功） */
+  signInWithPassword: (email: string, password: string) => Promise<boolean>;
+  /** 邮箱 + 密码注册（返回是否成功） */
+  signUpWithPassword: (email: string, password: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   /** 当前选中日期 key "YYYY-MM-DD"（联动日历回查灵感/历史） */
   selectedDate: string;
@@ -116,30 +120,14 @@ export function FlowProvider({ children }: { children: ReactNode }) {
 
     let channel: ReturnType<ReturnType<typeof getSupabase>["channel"]> | null = null;
     let cancelled = false;
+    const supabase = getSupabase();
 
-    (async () => {
-      const supabase = getSupabase();
-      const userId = await currentUserId();
-      if (cancelled) return;
-
-      if (!userId) {
-        // 未登录：保持本地快照 / mock，不订阅
-        return;
+    /** 订阅 tasks 表 Realtime（多端实时同步），重复调用前先断开旧订阅 */
+    const subscribeTasks = (userId: string) => {
+      if (channel) {
+        supabase.removeChannel(channel);
+        channel = null;
       }
-
-      setUserEmail((await supabase.auth.getUser()).data.user?.email ?? null);
-
-      // 2. 拉取今日远程任务（成功则覆盖快照）
-      const dateKey = todayKey();
-      const remote = await supabaseTaskRepo.fetchTasks(dateKey);
-      if (cancelled) return;
-      if (remote.length > 0) {
-        setTasks(remote);
-        saveSnapshot(remote);
-      }
-      setSynced(true);
-
-      // 3. 订阅 tasks 表 Realtime（多端实时同步）
       channel = supabase
         .channel("tasks-realtime")
         .on(
@@ -169,16 +157,52 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           }
         )
         .subscribe();
+    };
 
-      // 4. 监听认证状态变化（登录/登出/令牌刷新）
-      supabase.auth.onAuthStateChange((_event, session) => {
-        setUserEmail(session?.user?.email ?? null);
-        if (!session) {
-          setSynced(false);
-          setTasks(TODAY_TASKS);
-        }
-      });
+    /** 建立已登录会话：拉取云端任务 → 切换已同步 → 订阅 Realtime */
+    const attachRemoteSession = async (userId: string, email: string | null) => {
+      setUserEmail(email);
+      const dateKey = todayKey();
+      const remote = await supabaseTaskRepo.fetchTasks(dateKey);
+      if (cancelled) return;
+      // 云端有数据则覆盖本地；为空则保留当前本地数据（首次登录可把本地任务推上去）
+      if (remote.length > 0) {
+        setTasks(remote);
+        saveSnapshot(remote);
+      }
+      setSynced(true);
+      subscribeTasks(userId);
+    };
+
+    /** 清除已登录会话：回退本地 */
+    const detachRemoteSession = () => {
+      if (channel) {
+        supabase.removeChannel(channel);
+        channel = null;
+      }
+      setUserEmail(null);
+      setSynced(false);
+      setTasks(TODAY_TASKS);
+    };
+
+    (async () => {
+      const userId = await currentUserId();
+      if (cancelled) return;
+      if (!userId) return; // 未登录：保持本地快照 / mock，不订阅
+      const email = (await supabase.auth.getUser()).data.user?.email ?? null;
+      if (cancelled) return;
+      await attachRemoteSession(userId, email);
     })();
+
+    // 监听认证状态变化（登录 / 登出 / 令牌刷新）——保证密码登录后立即拉取云端数据
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (cancelled) return;
+      if (session?.user) {
+        void attachRemoteSession(session.user.id, session.user.email ?? null);
+      } else {
+        detachRemoteSession();
+      }
+    });
 
     // 5. 网络恢复：补录离线队列
     const flushQueue = async () => {
@@ -215,6 +239,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      authSub.subscription.unsubscribe();
       if (channel) {
         getSupabase().removeChannel(channel);
       }
@@ -293,6 +318,51 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       pushToast("登录链接已发送到邮箱，请查收并点击", "success");
     }
   }, [pushToast]);
+
+  /** 邮箱 + 密码登录：成功后 Supabase 持久化会话，onAuthStateChange 会自动拉取云端数据 */
+  const signInWithPassword = useCallback(
+    async (email: string, password: string): Promise<boolean> => {
+      if (!isSupabaseConfigured()) {
+        pushToast("Supabase 未配置，请先检查环境变量", "warn");
+        return false;
+      }
+      const { error } = await getSupabase().auth.signInWithPassword({ email, password });
+      if (error) {
+        pushToast(`登录失败：${translateAuthError(error.message)}`, "danger");
+        return false;
+      }
+      pushToast("登录成功，正在同步云端数据…", "success");
+      return true;
+    },
+    [pushToast]
+  );
+
+  /** 邮箱 + 密码注册：成功后若开启邮箱确认需验证；未开启则直接登录 */
+  const signUpWithPassword = useCallback(
+    async (email: string, password: string): Promise<boolean> => {
+      if (!isSupabaseConfigured()) {
+        pushToast("Supabase 未配置，请先检查环境变量", "warn");
+        return false;
+      }
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const { data, error } = await getSupabase().auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: `${origin}/auth/callback` },
+      });
+      if (error) {
+        pushToast(`注册失败：${translateAuthError(error.message)}`, "danger");
+        return false;
+      }
+      // 未开启「邮箱确认」时 registration 直接返回 session，即已登录
+      pushToast(
+        data.session ? "注册成功，已自动登录并开始同步" : "注册成功，请查收邮箱完成验证后登录",
+        "success"
+      );
+      return true;
+    },
+    [pushToast]
+  );
 
   const signOut = useCallback(async () => {
     if (!isSupabaseConfigured()) return;
@@ -517,6 +587,8 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     synced,
     userEmail,
     signInWithEmail,
+    signInWithPassword,
+    signUpWithPassword,
     signOut,
     selectedDate,
     setSelectedDate,
@@ -542,6 +614,22 @@ export function useFlow() {
 
 function byScheduledTime(a: Task, b: Task): number {
   return (a.scheduledTime ?? "99:99").localeCompare(b.scheduledTime ?? "99:99");
+}
+
+/** Supabase Auth 英文错误 → 中文提示（覆盖常见登录/注册场景） */
+function translateAuthError(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes("email_provider_disabled") || m.includes("email logins are disabled"))
+    return "邮件登录未启用：请在 Supabase 控制台 Authentication → Providers 开启 Email";
+  if (m.includes("invalid login credentials")) return "邮箱或密码不正确";
+  if (m.includes("email not confirmed")) return "邮箱尚未验证，请先查收验证邮件";
+  if (m.includes("user already registered") || m.includes("already been registered"))
+    return "该邮箱已注册，请直接登录";
+  if (m.includes("password should be at least")) return "密码至少 6 位";
+  if (m.includes("unable to validate email") || m.includes("invalid email")) return "邮箱格式不正确";
+  if (m.includes("rate limit") || m.includes("too many")) return "操作过于频繁，请稍后再试";
+  if (m.includes("network") || m.includes("fetch")) return "网络异常，请检查网络后重试";
+  return message;
 }
 
 function nowClock(): string {

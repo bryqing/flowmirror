@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Flame } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { SyncStatus } from "@/components/sync/sync-status";
@@ -10,6 +10,12 @@ import { cn } from "@/lib/utils";
 /** 应用外壳：氛围背景 + 深夜烛光模式自动切换 + PWA 全屏安全区适配 */
 export function AppShell({ children }: { children: ReactNode }) {
   const { candleMode } = useFlow();
+
+  // 解除 layout.tsx 中的启动看门狗：能跑到这里说明 React 已成功接管，
+  // 不会再出现「页面可见但点不动」的僵尸态。
+  useEffect(() => {
+    (window as unknown as { __fmAppMounted?: boolean }).__fmAppMounted = true;
+  }, []);
 
   return (
     <div

@@ -135,6 +135,21 @@ export interface Thought {
   taskId?: string;
 }
 
+/** 晨间心锚（Morning Anchor）：每日一条，由昨日反思 + 今日排布 AI 凝练 */
+export interface MorningAnchorEntry {
+  id: string;
+  /** 归属日 YYYY-MM-DD（本地时区），每日唯一 */
+  date: string;
+  /** 大字心锚：一行动作断言，AI 凝练 ≤15 字 */
+  slogan: string;
+  /** 小字注解：点破昨日卡点 + 今日时间锚点（几点前做什么） */
+  action: string;
+  /** 来源：AI 凝练 / 用户手改 / 种子数据 */
+  source: "ai" | "user" | "seed";
+  /** 具体时间戳 ISO 字符串 */
+  createdAt: string;
+}
+
 export const CATEGORY_META: Record<
   TaskCategory,
   { label: string; tone: string; text: string; bg: string; border: string; dot: string }

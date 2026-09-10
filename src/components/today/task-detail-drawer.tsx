@@ -8,7 +8,6 @@ import {
   ListChecks,
   Pause,
   Play,
-  RotateCcw,
   Sparkles,
   Timer,
 } from "lucide-react";
