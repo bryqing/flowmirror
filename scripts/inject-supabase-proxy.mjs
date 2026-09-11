@@ -13,31 +13,61 @@
  *   两者并存时，Netlify 原生规则优先级更高 → 线上走原生代理；
  *   本地 `next start` 或其他平台则回退到 next.config.ts 的 rewrites，行为一致。
  *
- * 失败策略：任何异常都只告警、不中断构建 —— 缺少变量时自动退回 next.config.ts 的 rewrites 代理。
+ * 缺失变量时：**整段代理规则会被注释掉**，而不是留下一个 `to = "__SUPABASE_PROXY_TARGET__/:splat"`
+ *   的坏规则（那会让 /api/supabase/* 变成一个指向不存在路径的同站代理）。
+ *   此时线上退化为「无代理」，由 next.config.ts 的 rewrites 兜底（若该变量也缺失则完全不代理，
+ *   前端回到 mock/本地模式 —— 因为 Supabase 本身就没配置）。
+ *
+ * 任何异常都只告警、不中断构建。
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 
 const PLACEHOLDER = "__SUPABASE_PROXY_TARGET__";
 const TOML_FILE = "netlify.toml";
+const BLOCK_HEADER = "[[redirects]]";
 
 const target = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
 
-if (!target) {
-  console.warn(
-    "[FlowMirror] 未设置 NEXT_PUBLIC_SUPABASE_URL，跳过 Netlify 代理注入。" +
-      "线上将退回 next.config.ts 的 rewrites 代理（仍可用，但可能受 Content-Encoding 改写影响）。"
-  );
-  process.exit(0);
-}
-
 try {
-  const source = readFileSync(TOML_FILE, "utf8");
-  if (!source.includes(PLACEHOLDER)) {
-    console.warn(`[FlowMirror] ${TOML_FILE} 中未找到占位符 ${PLACEHOLDER}，跳过注入（可能已注入过）。`);
+  const lines = readFileSync(TOML_FILE, "utf8").split("\n");
+  const hitIndex = lines.findIndex((line) => line.includes(PLACEHOLDER));
+
+  if (hitIndex === -1) {
+    console.log(`[FlowMirror] ${TOML_FILE} 中未找到代理占位符，无需注入（可能已注入过）。`);
     process.exit(0);
   }
-  writeFileSync(TOML_FILE, source.split(PLACEHOLDER).join(target), "utf8");
+
+  if (!target) {
+    // 变量缺失：注释掉整个 [[redirects]] 块，避免留下坏规则。
+    let start = hitIndex;
+    while (start >= 0 && lines[start].trim() !== BLOCK_HEADER) start--;
+    if (start === -1) start = hitIndex; // 兜底：至少注释掉含占位符的那一行
+
+    let end = start + 1;
+    while (end < lines.length && !/^\[/.test(lines[end])) end++;
+
+    for (let i = start; i < end; i++) {
+      if (lines[i].trim() !== "") lines[i] = `# ${lines[i]}`;
+    }
+    lines.splice(
+      start,
+      0,
+      "# ⚠️ 未检测到 NEXT_PUBLIC_SUPABASE_URL，已自动停用上面的 Supabase 反向代理规则。",
+      "#    请在 Netlify → Site configuration → Environment variables 中补齐该变量",
+      "#    （作用域需包含 Builds），然后重新部署。"
+    );
+
+    writeFileSync(TOML_FILE, lines.join("\n"), "utf8");
+    console.warn(
+      "[FlowMirror] 未设置 NEXT_PUBLIC_SUPABASE_URL，已停用 Netlify 代理规则。" +
+        "线上将退回 next.config.ts 的 rewrites 代理。"
+    );
+    process.exit(0);
+  }
+
+  lines[hitIndex] = lines[hitIndex].split(PLACEHOLDER).join(target);
+  writeFileSync(TOML_FILE, lines.join("\n"), "utf8");
   console.log(`[FlowMirror] 已注入 Supabase 反向代理目标：${target}`);
 } catch (err) {
   console.warn("[FlowMirror] 注入 Netlify 代理目标失败（不中断构建）：", err);
