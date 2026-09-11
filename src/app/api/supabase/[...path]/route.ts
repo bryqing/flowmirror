@@ -57,6 +57,23 @@ const STRIP_RESPONSE_HEADERS = new Set(["content-encoding", "content-length"]);
 /** 204 / 304 按规范不允许带响应体，构造 Response 时必须传 null */
 const BODYLESS_STATUS = new Set([204, 304]);
 
+/**
+ * 逐层展开错误链，取出真正的原因。
+ * undici 的 `fetch failed` 只是外壳，DNS 解析失败（ENOTFOUND）、TLS 失败等
+ * 真实信息都挂在 `err.cause` 上，必须展开才能定位问题。
+ */
+function describeCause(err: unknown): string | null {
+  const parts: string[] = [];
+  let current: unknown = err instanceof Error ? err.cause : undefined;
+  for (let depth = 0; current && depth < 4; depth++) {
+    const node = current as { code?: string; message?: string; cause?: unknown };
+    const text = [node.code, node.message].filter(Boolean).join(" ") || String(current);
+    parts.push(text);
+    current = node.cause;
+  }
+  return parts.length > 0 ? parts.join(" <- ") : null;
+}
+
 async function proxy(
   req: NextRequest,
   ctx: { params: Promise<{ path: string[] }> }
@@ -106,12 +123,19 @@ async function proxy(
       cache: "no-store",
     });
   } catch (err) {
-    // 网络层失败时给出结构化诊断，避免再次出现无法定位的黑盒 500
+    // 网络层失败时给出结构化诊断，避免再次出现无法定位的黑盒 500。
+    // ⚠️ undici 只会抛一个笼统的 "fetch failed"，真正的 DNS / TLS 原因藏在 err.cause 里
+    //    （如 ENOTFOUND / ECONNREFUSED / CERT_HAS_EXPIRED），必须挖出来，
+    //    否则又变成一个「只知道失败、不知道为什么」的错误。
     return Response.json(
       {
         error: "supabase_upstream_unreachable",
         target: `${target.origin}${target.pathname}`,
         message: err instanceof Error ? err.message : String(err),
+        cause: describeCause(err),
+        hint:
+          "最常见原因是 NEXT_PUBLIC_SUPABASE_URL 配置有误（域名拼写错 / 协议缺失 / 多了路径）。" +
+          "请核对部署环境变量，确保形如 https://<project-ref>.supabase.co 且不带结尾斜杠。",
       },
       { status: 502 }
     );
