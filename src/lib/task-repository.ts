@@ -112,6 +112,34 @@ export const supabaseTaskRepo: TaskRepository = {
   },
 };
 
+/**
+ * 拉取当前用户某日任务（严格模式）：任何失败都返回 `null`，**绝不回退 mock**。
+ *
+ * 专供「后台静默轮询」这类场景使用：轮询是在用户无感知的情况下刷新界面，
+ * 若沿用 `fetchTasks` 的 mock 回退，一次瞬时网络抖动就会把用户真实数据
+ * 覆写成演示数据（不可接受的静默数据损坏）。调用方拿到 null 时直接跳过本轮。
+ */
+export async function fetchTasksOrNull(dateKey: string): Promise<Task[] | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from("tasks")
+      .select("*")
+      .eq("date", dateKey)
+      .order("scheduled_time", { ascending: true, nullsFirst: false });
+
+    if (error) {
+      console.warn("[FlowMirror] 轮询拉取任务失败（保持本地状态）：", error.message);
+      return null;
+    }
+    return (data ?? []).map(rowToTask);
+  } catch (err) {
+    console.warn("[FlowMirror] 轮询拉取任务异常（保持本地状态）：", err);
+    return null;
+  }
+}
+
 /** 是否走远程（登录 + 配置齐全） */
 export function isRemoteMode(): boolean {
   return isSupabaseConfigured();

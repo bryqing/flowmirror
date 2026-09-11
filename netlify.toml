@@ -5,8 +5,14 @@
 # ============================================================================
 
 [build]
-  # 构建命令：走 package.json 的 build 脚本（即 next build）
-  command = "npm run build"
+  # 构建命令分两步：
+  #   1) scripts/inject-supabase-proxy.mjs —— 把下面 [[redirects]] 里的代理目标占位符
+  #      替换成 NEXT_PUBLIC_SUPABASE_URL 的真实值。
+  #      之所以要这样绕：Netlify 不支持在 netlify.toml 中插值环境变量，
+  #      但 [[redirects]] 段是在构建完成之后才读取的，所以构建命令内替换是官方推荐做法。
+  #      脚本失败只告警不中断，构建仍可继续（退回 next.config.ts 的 rewrites 代理）。
+  #   2) npm run build —— next build
+  command = "node scripts/inject-supabase-proxy.mjs && npm run build"
 
   # 发布目录必须指向 .next —— 构建完成后由 Next.js Runtime 接管，
   # 把 SSR 页面 / API 路由重新编排为 Netlify Functions 与静态资源。
@@ -36,6 +42,31 @@
   package = "@netlify/plugin-nextjs"
 
 # ----------------------------------------------------------------------------
+# Supabase 同源反向代理（解决国内直连被阻断）
+#
+# 背景：中国大陆网络直连 https://<ref>.supabase.co 会被阻断
+#       （浏览器报 ERR_CONNECTION_CLOSED），手机端必须挂梯子才能登录/同步。
+# 方案：把 Supabase 的全部 HTTP 端点挂到本站同源路径 /api/supabase/* 之下，
+#       由下面这条 Netlify 原生代理重定向透传到真实 Supabase。
+#
+# 为什么用 Netlify 原生 redirects 而不是只靠 next.config.ts 的 rewrites：
+#   Netlify 走 next.config 的 rewrites 代理时会改写 Content-Encoding 响应头，
+#   可能导致上游压缩内容无法被浏览器正确解码（连得上但解析失败）。
+#   Netlify 原生代理没有这个副作用，且优先级高于 Next.js Runtime 生成的规则。
+#   next.config.ts 的 rewrites 仍然保留，作为本地 next start / 其他平台的等价回退。
+#
+# status = 200 表示「代理/重写」（地址栏不变）；force = true 确保该规则优先匹配。
+# 注意：代理请求的 `apikey` / `Authorization` / `Prefer` / `Cookie` 请求头会原样透传，
+#       响应头（含 Set-Cookie）原样返回，RLS 与 JWT 校验依旧由 Supabase 独立裁决。
+#       但 WebSocket 无法经代理，故 Realtime 在代理模式下自动降级为轮询（见 flow-context.tsx）。
+# ----------------------------------------------------------------------------
+[[redirects]]
+  from = "/api/supabase/*"
+  to = "__SUPABASE_PROXY_TARGET__/:splat"
+  status = 200
+  force = true
+
+# ----------------------------------------------------------------------------
 # ⚠️ 函数超时（部署后需留意）
 #
 # Netlify 同步函数默认执行上限为 10 秒（Pro 及以上可提到 26 秒）。
@@ -48,5 +79,5 @@
 #
 # 注意：不要在页面路由上添加全站 catch-all redirect，会覆盖 Next.js Runtime
 #       自身的路由与缓存规则，导致页面再次 404。
+#       （上面的 /api/supabase/* 只覆盖该前缀，不影响页面路由。）
 # ----------------------------------------------------------------------------
-

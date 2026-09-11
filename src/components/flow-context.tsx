@@ -16,11 +16,13 @@ import { uid } from "@/lib/utils";
 import {
   getSupabase,
   isSupabaseConfigured,
+  isRealtimeAvailable,
   currentUserId,
 } from "@/lib/supabase";
 import {
   isRemoteMode,
   supabaseTaskRepo,
+  fetchTasksOrNull,
   todayKey,
 } from "@/lib/task-repository";
 import {
@@ -70,6 +72,15 @@ interface FlowContextValue {
   openDetail: (id: string) => void;
   closeDetail: () => void;
   pushToast: (message: string, tone?: Toast["tone"]) => void;
+}
+
+/**
+ * 判断两份任务列表是否完全一致（用于轮询去抖：内容没变就不 setState，避免无谓重渲染）。
+ * 只做「判定「变没变」」，不做语义 diff —— 出现假阴性（判为已变）只会多渲染一次，无副作用。
+ */
+function sameTaskList(a: Task[], b: Task[]): boolean {
+  if (a.length !== b.length) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 const FlowContext = createContext<FlowContextValue | null>(null);
@@ -124,6 +135,10 @@ export function FlowProvider({ children }: { children: ReactNode }) {
 
     /** 订阅 tasks 表 Realtime（多端实时同步），重复调用前先断开旧订阅 */
     const subscribeTasks = (userId: string) => {
+      // 代理模式（浏览器 + 生产）下 Realtime 不可用：WebSocket 无法穿过 HTTP 反向代理。
+      // 直接跳过，避免底层以 wss://<origin>/api/supabase/... 无限重连刷错误日志；
+      // 多端同步由下方 startPolling() 的轮询接管。
+      if (!isRealtimeAvailable()) return;
       if (channel) {
         supabase.removeChannel(channel);
         channel = null;
@@ -159,7 +174,53 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         .subscribe();
     };
 
-    /** 建立已登录会话：拉取云端任务 → 切换已同步 → 订阅 Realtime */
+    // ---- 轮询回补：代理模式下 Realtime 的等价替代 ----
+    // 页面可见时每 30s 拉一次云端任务；失败保持本地状态，绝不回退 mock。
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let pollInFlight = false;
+
+    const stopPolling = () => {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+
+    const pollOnce = async () => {
+      // 后台标签页不轮询（省电省流量）；回到前台会立即补一次
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (pollInFlight) return;
+      // 有未补录的本地写入时先按兵不动，避免覆盖刚产生的本地改动
+      if (loadQueue().length > 0) return;
+      pollInFlight = true;
+      try {
+        const remote = await fetchTasksOrNull(todayKey());
+        if (cancelled || !remote) return;
+        setTasks((prev) => {
+          if (sameTaskList(prev, remote)) return prev; // 无变化则不触发重渲染
+          saveSnapshot(remote);
+          return remote;
+        });
+      } catch (err) {
+        console.warn("[FlowMirror] 轮询同步失败（保持本地状态）：", err);
+      } finally {
+        pollInFlight = false;
+      }
+    };
+
+    const startPolling = () => {
+      if (isRealtimeAvailable()) return; // 有 Realtime 就无需轮询
+      stopPolling();
+      pollTimer = setInterval(() => void pollOnce(), 30_000);
+    };
+
+    const handleVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void pollOnce();
+      }
+    };
+
+    /** 建立已登录会话：拉取云端任务 → 切换已同步 → 订阅 Realtime / 启动轮询 */
     const attachRemoteSession = async (userId: string, email: string | null) => {
       setUserEmail(email);
       const dateKey = todayKey();
@@ -172,6 +233,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       }
       setSynced(true);
       subscribeTasks(userId);
+      startPolling();
     };
 
     /** 清除已登录会话：回退本地 */
@@ -180,6 +242,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         supabase.removeChannel(channel);
         channel = null;
       }
+      stopPolling();
       setUserEmail(null);
       setSynced(false);
       setTasks(TODAY_TASKS);
@@ -236,15 +299,23 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     if (typeof window !== "undefined") {
       window.addEventListener("online", flushQueue);
     }
+    if (typeof document !== "undefined") {
+      // 从后台切回前台时立即补一次轮询，避免用户看到过期数据
+      document.addEventListener("visibilitychange", handleVisibility);
+    }
 
     return () => {
       cancelled = true;
       authSub.subscription.unsubscribe();
+      stopPolling();
       if (channel) {
         getSupabase().removeChannel(channel);
       }
       if (typeof window !== "undefined") {
         window.removeEventListener("online", flushQueue);
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibility);
       }
     };
   }, [pushToast]);
