@@ -1,24 +1,5 @@
 import type { NextConfig } from "next";
 
-/**
- * Supabase 反向代理（BFF / Rewrite）
- * ---------------------------------------------------------------------------
- * 背景：中国大陆网络直连 `https://<ref>.supabase.co` 会被阻断（ERR_CONNECTION_CLOSED）。
- * 方案：把 Supabase 的 HTTP 端点整体挂到本站同源路径 `/api/supabase/*` 之下，
- *       再由下面的 rewrites 透传到真实 Supabase。
- * 收益：同源 → 无跨域、无 TLS 阻断、Cookie 天然可用；手机端无需任何代理工具。
- *
- * ⚠️ 该变量的值会写进构建产物（rewrite 路由表），因此必须在 **构建环境** 中可见
- *    （Netlify → Environment variables，作用域要勾上 Builds）。
- */
-const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
-
-if (!supabaseUrl) {
-  console.warn(
-    "[FlowMirror] 未检测到 NEXT_PUBLIC_SUPABASE_URL，/api/supabase 反向代理不会启用。"
-  );
-}
-
 const nextConfig: NextConfig = {
   // 关闭开发环境左下角的 Next.js 调试浮标（N 图标 / 路由状态指示器），
   // 避免英文底层调试遮罩干扰手机与电脑端视觉；系统级提示统一走自有中文 Toast。
@@ -35,30 +16,26 @@ const nextConfig: NextConfig = {
     "*.loca.lt",
   ],
 
+  // 代理场景下不要做尾部斜杠归一化：
+  // 否则 `/api/supabase/rest/v1/` 这类请求会被 308 改成去掉斜杠的路径，
+  // 既多一次往返，也破坏了「原样透传」的语义。
+  skipTrailingSlashRedirect: true,
+
   /**
-   * Supabase 同源反向代理。
+   * ⚠️ 这里**故意没有** Supabase 的 rewrites 规则 —— 不要加回来。
    *
-   * - source `/api/supabase/:path*` 覆盖 Supabase 全部 HTTP 子路径：
-   *   auth（登录/注册/刷新令牌）、rest（PostgREST 增删改查）、storage、functions。
-   * - destination `${NEXT_PUBLIC_SUPABASE_URL}/:path*` 为外部绝对地址，
-   *   Next.js 会以**透传**方式转发请求：方法、请求体、查询串、以及全部请求标头
-   *   （`apikey`、`Authorization`、`Prefer`、`Content-Type`、`Cookie`）均原样带给 Supabase，
-   *   响应标头（含 `Set-Cookie`）亦原样返回浏览器。
-   * - 不做任何鉴权改写：RLS 与 JWT 校验依旧由 Supabase 负责，代理层对会话完全透明。
+   * Supabase 的反向代理由 `src/app/api/supabase/[...path]/route.ts` 单独承担，
+   * 全线只保留这一个实现。原因（线上实测，非推测）：
    *
-   * 注意：这里用 rewrites 而非 catch-all Route Handler，是因为 Netlify 会把 rewrite
-   *      编译成边缘重定向规则（零函数调用、零冷启动）；Route Handler 会让每个
-   *      Supabase 请求都真实执行一次 Serverless 函数，徒增延迟与配额消耗。
+   *  1. 若在此处写 `rewrites()` 指向外部 Supabase 地址，Netlify 会改写
+   *     `Content-Encoding`（PostHog 官方文档点名此坑），上游压缩内容解码失败 → 500。
+   *  2. 若再叠加 netlify.toml 的原生 `[[redirects]] status=200`，Netlify 原生规则
+   *     优先级更高，会遮蔽这里；两者并存时排障无法区分是谁在应答。
+   *  3. 实测线上原生代理返回的是**空 body 的 text/plain 500**，没有上游 `sb-*` 标头，
+   *     也不带 Next.js 运行时的 `Cache-Status: "Next.js"` 标记 —— 黑盒且不可诊断。
+   *
+   * 收敛为 Route Handler 后，目标地址、请求/响应标头全部可控，失败会返回结构化诊断。
    */
-  async rewrites() {
-    if (!supabaseUrl) return [];
-    return [
-      {
-        source: "/api/supabase/:path*",
-        destination: `${supabaseUrl}/:path*`,
-      },
-    ];
-  },
 };
 
 export default nextConfig;

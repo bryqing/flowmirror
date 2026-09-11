@@ -5,14 +5,8 @@
 # ============================================================================
 
 [build]
-  # 构建命令分两步：
-  #   1) scripts/inject-supabase-proxy.mjs —— 把下面 [[redirects]] 里的代理目标占位符
-  #      替换成 NEXT_PUBLIC_SUPABASE_URL 的真实值。
-  #      之所以要这样绕：Netlify 不支持在 netlify.toml 中插值环境变量，
-  #      但 [[redirects]] 段是在构建完成之后才读取的，所以构建命令内替换是官方推荐做法。
-  #      脚本失败只告警不中断，构建仍可继续（退回 next.config.ts 的 rewrites 代理）。
-  #   2) npm run build —— next build
-  command = "node scripts/inject-supabase-proxy.mjs && npm run build"
+  # 构建命令：走 package.json 的 build 脚本（即 next build）
+  command = "npm run build"
 
   # 发布目录必须指向 .next —— 构建完成后由 Next.js Runtime 接管，
   # 把 SSR 页面 / API 路由重新编排为 Netlify Functions 与静态资源。
@@ -46,25 +40,26 @@
 #
 # 背景：中国大陆网络直连 https://<ref>.supabase.co 会被阻断
 #       （浏览器报 ERR_CONNECTION_CLOSED），手机端必须挂梯子才能登录/同步。
-# 方案：把 Supabase 的全部 HTTP 端点挂到本站同源路径 /api/supabase/* 之下，
-#       由下面这条 Netlify 原生代理重定向透传到真实 Supabase。
 #
-# 为什么用 Netlify 原生 redirects 而不是只靠 next.config.ts 的 rewrites：
-#   Netlify 走 next.config 的 rewrites 代理时会改写 Content-Encoding 响应头，
-#   可能导致上游压缩内容无法被浏览器正确解码（连得上但解析失败）。
-#   Netlify 原生代理没有这个副作用，且优先级高于 Next.js Runtime 生成的规则。
-#   next.config.ts 的 rewrites 仍然保留，作为本地 next start / 其他平台的等价回退。
+# ⚠️ 这里**故意没有** /api/supabase/* 的 [[redirects]] —— 不要加回来。
 #
-# status = 200 表示「代理/重写」（地址栏不变）；force = true 确保该规则优先匹配。
-# 注意：代理请求的 `apikey` / `Authorization` / `Prefer` / `Cookie` 请求头会原样透传，
-#       响应头（含 Set-Cookie）原样返回，RLS 与 JWT 校验依旧由 Supabase 独立裁决。
-#       但 WebSocket 无法经代理，故 Realtime 在代理模式下自动降级为轮询（见 flow-context.tsx）。
+# 线上实测（jocular-pony-b41da7）三种方案的结论：
+#   1) netlify.toml 原生代理（from="/api/supabase/*"、status=200、force=true）
+#      → 跑到 Netlify 边缘代理后上游 fetch 直接失败：返回**空 body 的 text/plain 500**，
+#        响应里既没有上游的 sb-* 标头，也不带 Next.js 运行时的
+#        Cache-Status: "Next.js" 标记（对照 /api/nope 的 404 明确带该标记），
+#        说明请求根本没到 Supabase，且错误无法从外部诊断。
+#   2) next.config.ts 的 rewrites 指向外部 Supabase
+#      → Netlify 会改写 Content-Encoding（PostHog 官方文档点名），压缩内容解码失败。
+#   3) 两者并存还会互相遮蔽（原生规则优先级更高），排障时无法判断是谁在应答。
+#
+# 最终收敛为**单一实现**：src/app/api/supabase/[...path]/route.ts 的 Route Handler。
+# 该路径与 /api/ai/* 同属 Netlify Functions，已确认可正常应答；且目标地址与
+# 请求/响应标头完全可控，失败会返回结构化诊断信息，不再是黑盒 500。
+#
+# 若将来要改回边缘代理，请先在 Netlify 侧确认能读到代理失败日志，
+# 并同时删除 Route Handler，避免两层并存。
 # ----------------------------------------------------------------------------
-[[redirects]]
-  from = "/api/supabase/*"
-  to = "__SUPABASE_PROXY_TARGET__/:splat"
-  status = 200
-  force = true
 
 # ----------------------------------------------------------------------------
 # ⚠️ 函数超时（部署后需留意）
@@ -72,6 +67,8 @@
 # Netlify 同步函数默认执行上限为 10 秒（Pro 及以上可提到 26 秒）。
 # 本项目 /api/ai/* 走 DeepSeek 推理模型，实测耗时 2~14 秒（冷启动更久），
 # 因此这些路由有概率触发 504 / 「Task timed out」。
+# 注意 /api/supabase/* 也是函数路由（代理转发），但它只做透传、耗时在百毫秒级，
+# 一般不受超时影响。
 #
 # 若线上出现 AI 路由超时：
 #   1. Netlify 控制台 → Site configuration → Functions → 把超时调到上限；
@@ -79,5 +76,4 @@
 #
 # 注意：不要在页面路由上添加全站 catch-all redirect，会覆盖 Next.js Runtime
 #       自身的路由与缓存规则，导致页面再次 404。
-#       （上面的 /api/supabase/* 只覆盖该前缀，不影响页面路由。）
 # ----------------------------------------------------------------------------
