@@ -1,0 +1,52 @@
+# ============================================================================
+# FlowMirror · Netlify 部署配置
+# 技术栈：Next.js 16 App Router（SSR / Route Handlers / Server Actions / SSE 流式）
+# 参考：https://docs.netlify.com/build/frameworks/framework-setup-guides/nextjs/overview/
+# ============================================================================
+
+[build]
+  # 构建命令：走 package.json 的 build 脚本（即 next build）
+  command = "npm run build"
+
+  # 发布目录必须指向 .next —— 构建完成后由 Next.js Runtime 接管，
+  # 把 SSR 页面 / API 路由重新编排为 Netlify Functions 与静态资源。
+  # ⚠️ 不要填 "out"：那是 next export 静态导出的目录，会直接丢掉 SSR 与所有 API 路由。
+  publish = ".next"
+
+[build.environment]
+  # Next.js 16 要求 Node.js >= 20.9.0，显式固定为 22，
+  # 避免 Netlify 默认 Node 版本过低导致构建中断。
+  NODE_VERSION = "22"
+
+# ----------------------------------------------------------------------------
+# Next.js Runtime（OpenNext 适配器）
+#
+# 作用：自动为 SSR / ISR / Route Handlers / Server Actions 创建 Netlify Function，
+#       为 Next.js Middleware 创建 Edge Function，并接管 next/image 走 Image CDN。
+#
+# 为什么显式声明：Netlify 一般会自动挂载该运行时，但本站点此前出现
+#       「只发布了源码目录 → 全站 404」，说明框架未被正确识别、运行时未激活。
+#       显式声明可确保每次构建必定挂载。
+#
+# 权衡：显式声明会「固定」适配器版本，不再跟随 Netlify 自动升级。
+#       若希望恢复自动更新（推荐长期做法），删除下面 [[plugins]] 段，
+#       并从 package.json 的 devDependencies 中移除 @netlify/plugin-nextjs 即可。
+# ----------------------------------------------------------------------------
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# ----------------------------------------------------------------------------
+# ⚠️ 函数超时（部署后需留意）
+#
+# Netlify 同步函数默认执行上限为 10 秒（Pro 及以上可提到 26 秒）。
+# 本项目 /api/ai/* 走 DeepSeek 推理模型，实测耗时 2~14 秒（冷启动更久），
+# 因此这些路由有概率触发 504 / 「Task timed out」。
+#
+# 若线上出现 AI 路由超时：
+#   1. Netlify 控制台 → Site configuration → Functions → 把超时调到上限；
+#   2. 或在构建日志 / Functions 面板确认运行时函数名后，按官方语法单独放宽。
+#
+# 注意：不要在页面路由上添加全站 catch-all redirect，会覆盖 Next.js Runtime
+#       自身的路由与缓存规则，导致页面再次 404。
+# ----------------------------------------------------------------------------
+
