@@ -128,7 +128,7 @@ export function CommandBar() {
           <div className="overflow-hidden">
             <div className="flex items-start gap-2 rounded-xl border border-white/[0.07] bg-white/[0.04] px-3.5 py-2.5 text-xs leading-relaxed">
               <span className="mt-0.5 size-1.5 shrink-0 rounded-full bg-cat-deep animate-breathe" />
-              <p className="text-muted-foreground">
+              <p className="text-muted-foreground" data-command-preview>
                 <span className="mr-1.5 rounded bg-cat-deep/15 px-1.5 py-0.5 text-[10px] font-medium text-cat-deep">
                   {intentLabel(parsed?.intent)}
                 </span>

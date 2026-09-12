@@ -7,8 +7,27 @@
 
 import type { Task } from "./types";
 
-const SNAPSHOT_KEY = "flowmirror:tasks:snapshot";
+const SNAPSHOT_PREFIX = "flowmirror:tasks:snapshot";
 const QUEUE_KEY = "flowmirror:tasks:queue";
+
+/**
+ * 旧版快照键（无日期维度，只存过「今日」）。
+ * 保留仅用于**今日**的回退读取，做一次平滑迁移：一旦今日数据被重新保存，
+ * 就会写到带日期的新键上，旧键自然失效。
+ */
+const LEGACY_SNAPSHOT_KEY = "flowmirror:tasks:snapshot";
+
+/** 本地时区的今天（YYYY-MM-DD）。不能 import todayKey：那会引入 supabase 依赖链 */
+function localToday(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+function snapshotKey(dateKey: string): string {
+  return `${SNAPSHOT_PREFIX}:${dateKey}`;
+}
 
 export type PendingOp =
   | { type: "insert"; task: Task; dateKey: string; clientId: string }
@@ -34,21 +53,31 @@ function safeSet(key: string, value: unknown): void {
   }
 }
 
-/** 保存任务快照（乐观更新时同步写，作为离线兜底） */
-export function saveSnapshot(tasks: Task[]): void {
-  safeSet(SNAPSHOT_KEY, tasks);
+/**
+ * 保存任务快照（乐观更新时同步写，作为离线兜底）。
+ *
+ * ⚠️ 必须按日期分键：看板可以查看任意历史日期，若共用一个键，
+ * 回看历史时的一次编辑就会把「今日」的离线快照覆盖成那天的数据 ——
+ * 表现是回到今天后发现今天的任务变了。
+ */
+export function saveSnapshot(tasks: Task[], dateKey: string): void {
+  safeSet(snapshotKey(dateKey), tasks);
 }
 
-/** 读取最近一次任务快照 */
-export function loadSnapshot(): Task[] | null {
-  return safeGet<Task[]>(SNAPSHOT_KEY);
+/** 读取指定日期的任务快照（今日可回退到旧版无日期键） */
+export function loadSnapshot(dateKey: string): Task[] | null {
+  const scoped = safeGet<Task[]>(snapshotKey(dateKey));
+  if (scoped) return scoped;
+  if (dateKey === localToday()) return safeGet<Task[]>(LEGACY_SNAPSHOT_KEY);
+  return null;
 }
 
-/** 清空快照 */
-export function clearSnapshot(): void {
+/** 清空某日快照 */
+export function clearSnapshot(dateKey: string): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.removeItem(SNAPSHOT_KEY);
+    window.localStorage.removeItem(snapshotKey(dateKey));
+    if (dateKey === localToday()) window.localStorage.removeItem(LEGACY_SNAPSHOT_KEY);
   } catch {
     /* ignore */
   }

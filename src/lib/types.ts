@@ -121,7 +121,17 @@ export interface HeatmapData {
 
 /** 自然语言命令解析结果 */
 export type ParsedCommand =
-  | { intent: "add"; title: string; dayLabel: string; time?: string; summary: string }
+  | {
+      intent: "add";
+      title: string;
+      dayLabel: string;
+      time?: string;
+      /** 本地规则判定的象限（见 lib/nlp.ts classifyQuadrant） */
+      quadrant: Quadrant;
+      /** 是否命中明确信号；false 表示只是兜底值，可由 AI 复核纠正 */
+      confident: boolean;
+      summary: string;
+    }
   | { intent: "reschedule"; keyword: string; dayLabel: string; time?: string; summary: string }
   | { intent: "blackhole"; title: string; minutes: number; summary: string }
   | { intent: "fuse"; summary: string }

@@ -10,7 +10,16 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { MicroReview, ParsedCommand, Task, TaskCategory } from "@/lib/types";
+import {
+  QUADRANT_META,
+  coerceQuadrant,
+  quadrantToCategory,
+  type MicroReview,
+  type ParsedCommand,
+  type Quadrant,
+  type Task,
+  type TaskCategory,
+} from "@/lib/types";
 import { TODAY_TASKS } from "@/lib/mock-data";
 import { uid } from "@/lib/utils";
 import {
@@ -59,9 +68,15 @@ interface FlowContextValue {
   /** 邮箱 + 密码注册（返回是否成功） */
   signUpWithPassword: (email: string, password: string) => Promise<boolean>;
   signOut: () => Promise<void>;
-  /** 当前选中日期 key "YYYY-MM-DD"（联动日历回查灵感/历史） */
+  /** 当前选中日期 key "YYYY-MM-DD"（联动日历回查灵感/历史任务） */
   selectedDate: string;
   setSelectedDate: (key: string) => void;
+  /** 今天的日期 key（客户端挂载后校准） */
+  today: string;
+  /** 是否正在查看今天；false = 历史回看模式（看板数据为该日历史任务） */
+  isViewingToday: boolean;
+  /** 一键回到今天 */
+  goToday: () => void;
   completeTask: (id: string) => void;
   closeReview: () => void;
   submitReview: (id: string, review: Omit<MicroReview, "id" | "createdAt">) => void;
@@ -106,6 +121,35 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const [synced, setSynced] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(() => todayKey());
+  /** 挂载后校准的「今天」。初值与 selectedDate 同源，SSR 与首帧一致，不产生水合差异 */
+  const [today, setToday] = useState<string>(() => todayKey());
+
+  /**
+   * 看板当前**真实代表**的日期 —— 也就是 `tasks` 数组实际归属的那一天。
+   *
+   * 与 `selectedDate` 的区别很关键：切换日期后，`tasks` 要等到快照/远程数据
+   * 落地才会换成新日期的内容。若写入时直接用 `selectedDate`，在切换的瞬间做一次
+   * 编辑就会把「旧日期的任务列表」存到「新日期」名下（快照与云端日期双错位）。
+   * 因此所有写入都以这个 ref 为准，它只在真正为某日装载完任务时才推进。
+   */
+  const tasksDateRef = useRef<string>(todayKey());
+  /** 供轮询等长生命周期回调读取最新查看日期，避免闭包读到过期值 */
+  const selectedDateRef = useRef<string>(selectedDate);
+  /** 已登录用户 id（供「切换日期时拉取该日云端任务」使用） */
+  const userIdRef = useRef<string | null>(null);
+  /** 今天的日期 key，供长生命周期回调使用 */
+  const todayRef = useRef<string>(today);
+
+  /** 某日无远程数据时的本地兜底：今日给演示数据，其余日期一律留空 */
+  const localTasksFor = useCallback((dateKey: string): Task[] => {
+    const snap = loadSnapshot(dateKey);
+    if (snap) return snap;
+    return dateKey === todayRef.current ? TODAY_TASKS : [];
+  }, []);
+
+  const isViewingToday = selectedDate === today;
+
+  const goToday = useCallback(() => setSelectedDate(today), [today]);
 
   // 远程写入开关：避免在 Realtime 回调里重复回写
   const suppressRemoteRef = useRef(false);
@@ -123,17 +167,48 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     }, 4600);
   }, []);
 
-  // ---- 挂载后异步读取本地快照（离线兜底）----
-  // 仅在客户端、且尚未登录时生效；登录态下由下方 Supabase 拉取远程数据覆盖。
-  // 放在 effect 中异步触发，确保 SSR 首帧与客户端首帧都渲染 mock，彻底斩断水合差异。
+  // ---- 按「查看日期」装载任务：本地快照优先，随后由下方远程数据覆盖 ----
+  // 看板与灵感流共用 selectedDate，所以切换日期时这里必须跟着换数据源。
+  //
+  // ⚠️ 非今日且本地无快照时渲染**空列表**，绝不回退 TODAY_TASKS ——
+  //    演示数据是「今天」的样例，拿它去填历史日期会凭空伪造出一整天的假记录。
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const snap = loadSnapshot();
-    if (snap && snap.length > 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTasks(snap);
-    }
+    selectedDateRef.current = selectedDate;
+    // tasks 从这一刻起代表 selectedDate，之后的写入都按它归属日期
+    tasksDateRef.current = selectedDate;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTasks(localTasksFor(selectedDate));
+  }, [selectedDate, today, localTasksFor]);
+
+  // 挂载后校准「今天」：跨零点打开页面时，初值可能与真实日期差一天
+  useEffect(() => {
+    const t = todayKey();
+    todayRef.current = t;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setToday(t);
   }, []);
+
+  // ---- 切换查看日期时拉取该日云端任务（已登录才发）----
+  // 快照已在上面同步渲染，这里只做「补齐/纠正」，所以不阻塞首屏、也不闪空列表。
+  useEffect(() => {
+    if (typeof window === "undefined" || !isSupabaseConfigured()) return;
+    if (!userIdRef.current) return;
+    let cancelled = false;
+    void (async () => {
+      const remote = await fetchTasksOrNull(selectedDate);
+      if (cancelled || remote === null) return;
+      // 今日云端为空时保留本地数据（首次登录可把本地任务推上去）；
+      // 历史日期为空就应当是空的 —— 空列表本身是有效结果，要如实呈现。
+      if (remote.length === 0 && selectedDate === todayRef.current) return;
+      tasksDateRef.current = selectedDate;
+      setTasks(remote);
+      saveSnapshot(remote, selectedDate);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDate]);
 
   // ---- Supabase 初始化：登录态检测 + 拉取远程任务 + Realtime 订阅 + 离线回退 ----
   useEffect(() => {
@@ -161,6 +236,13 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           (payload) => {
             if (suppressRemoteRef.current) return;
             const row = payload.new as Record<string, unknown>;
+            // 只吸收「当前查看日期」的变更：看板可能停在历史日期上，
+            // 若把其他日期的行也塞进来，历史视图里会凭空多出今天的任务。
+            const rowDate =
+              typeof row.date === "string"
+                ? row.date
+                : (payload.old as { date?: string } | null)?.date;
+            if (rowDate && rowDate !== selectedDateRef.current) return;
             setTasks((prev) => {
               const next = (() => {
                 switch (payload.eventType) {
@@ -176,7 +258,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
                     return prev;
                 }
               })();
-              saveSnapshot(next);
+              saveSnapshot(next, selectedDateRef.current);
               return next;
             });
           }
@@ -204,11 +286,14 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       if (loadQueue().length > 0) return;
       pollInFlight = true;
       try {
-        const remote = await fetchTasksOrNull(todayKey());
+        const dateKey = selectedDateRef.current;
+        const remote = await fetchTasksOrNull(dateKey);
         if (cancelled || !remote) return;
+        // 今日云端为空 → 保留本地（可能是还没推上去的离线任务）
+        if (remote.length === 0 && dateKey === todayRef.current) return;
         setTasks((prev) => {
           if (sameTaskList(prev, remote)) return prev; // 无变化则不触发重渲染
-          saveSnapshot(remote);
+          saveSnapshot(remote, dateKey);
           return remote;
         });
       } catch (err) {
@@ -232,22 +317,26 @@ export function FlowProvider({ children }: { children: ReactNode }) {
 
     /** 建立已登录会话：拉取云端任务 → 切换已同步 → 订阅 Realtime / 启动轮询 */
     const attachRemoteSession = async (userId: string, email: string | null) => {
+      userIdRef.current = userId;
       setUserEmail(email);
-      const dateKey = todayKey();
+      // 拉取「当前正在查看的那天」，而不是死板地拉今天
+      const dateKey = selectedDateRef.current;
       const remote = await supabaseTaskRepo.fetchTasks(dateKey);
       if (cancelled) return;
       // 云端有数据则覆盖本地；为空则保留当前本地数据（首次登录可把本地任务推上去）
       if (remote.length > 0) {
+        tasksDateRef.current = dateKey;
         setTasks(remote);
-        saveSnapshot(remote);
+        saveSnapshot(remote, dateKey);
       }
       setSynced(true);
       subscribeTasks(userId);
       startPolling();
     };
 
-    /** 清除已登录会话：回退本地 */
+    /** 清除已登录会话：回退到本地数据（当日快照优先，今日无快照才用演示数据） */
     const detachRemoteSession = () => {
+      userIdRef.current = null;
       if (channel) {
         supabase.removeChannel(channel);
         channel = null;
@@ -255,7 +344,9 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       stopPolling();
       setUserEmail(null);
       setSynced(false);
-      setTasks(TODAY_TASKS);
+      const dateKey = selectedDateRef.current;
+      tasksDateRef.current = dateKey;
+      setTasks(localTasksFor(dateKey));
     };
 
     (async () => {
@@ -306,12 +397,13 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         }
         if (ok) dequeue(op.clientId);
       }
-      // 补录完成后刷新一次远程，确保状态一致
-      const dateKey = todayKey();
+      // 补录完成后刷新一次远程，确保状态一致（刷新当前查看的那天）
+      const dateKey = selectedDateRef.current;
       const refreshed = await supabaseTaskRepo.fetchTasks(dateKey);
       if (!cancelled && refreshed.length > 0) {
+        tasksDateRef.current = dateKey;
         setTasks(refreshed);
-        saveSnapshot(refreshed);
+        saveSnapshot(refreshed, dateKey);
       }
     };
 
@@ -337,7 +429,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         document.removeEventListener("visibilitychange", handleVisibility);
       }
     };
-  }, [pushToast]);
+  }, [pushToast, localTasksFor]);
 
   const completeTask = useCallback((id: string) => {
     setTasks((prev) => {
@@ -347,7 +439,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           : t
       );
       // 本地快照兜底
-      saveSnapshot(next);
+      saveSnapshot(next, tasksDateRef.current);
       // 远程同步写库（失败入队，网络恢复补录）
       const updated = next.find((t) => t.id === id);
       if (updated && isRemoteMode()) {
@@ -375,7 +467,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         const next = prev.map((t) =>
           t.id === id ? { ...t, microReviews: [...t.microReviews, full] } : t
         );
-        saveSnapshot(next);
+        saveSnapshot(next, tasksDateRef.current);
         const updated = next.find((t) => t.id === id);
         if (updated && isRemoteMode()) {
           const op: PendingOp = { type: "update", task: updated, clientId: `upd-${id}-${full.id}` };
@@ -458,19 +550,69 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     if (!isSupabaseConfigured()) return;
     await getSupabase().auth.signOut();
     setSynced(false);
-    setTasks(TODAY_TASKS);
-    pushToast("已退出登录，回到本地演示模式", "info");
-  }, [pushToast]);
+    const dateKey = selectedDateRef.current;
+    tasksDateRef.current = dateKey;
+    setTasks(localTasksFor(dateKey));
+    pushToast("已退出登录，回到本地模式", "info");
+  }, [localTasksFor, pushToast]);
+
+  /**
+   * AI 象限复核 —— 只在本地方案「没底气」时调用。
+   *
+   * 命令条追求的是**即时**录入，所以先用本地规则（`classifyQuadrant`）判定；
+   * 规则由 QUADRANT_META 判据拆解而来，常见表达都能命中。只有一句话里没有任何
+   * 可识别的信号（`confident: false`，兜底成了 q3）时，才追加一次 AI 复核 ——
+   * 复用与「AI 速记」完全相同的端点与判据，结论一致就什么都不做，
+   * 不一致才把任务挪到正确象限并**明确告知用户**（不静默改用户的东西）。
+   */
+  const refineTaskQuadrant = useCallback(
+    async (taskId: string, title: string, localQuadrant: Quadrant) => {
+      const local = tasks.find((t) => t.id === taskId);
+      if (!local) return;
+      try {
+        const res = await fetch("/api/ai/parse-tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: title }),
+        });
+        if (!res.ok) return; // AI 未配置 / 超时 / 解析失败：保留本地判定
+        const data = (await res.json()) as { tasks?: { quadrant?: unknown }[] };
+        const refined = coerceQuadrant(data.tasks?.[0]?.quadrant);
+        if (!refined || refined === localQuadrant) return;
+
+        const updatedTask: Task = { ...local, category: quadrantToCategory(refined) };
+        setTasks((prev) => {
+          const next = prev.map((t) => (t.id === taskId ? updatedTask : t));
+          saveSnapshot(next, tasksDateRef.current);
+          return next;
+        });
+        // 同步云端（本地临时 id 还没落库，等 flushQueue 补录时会带上新分类）
+        if (isRemoteMode() && SERVER_ID.test(updatedTask.id)) {
+          const op: PendingOp = { type: "update", task: updatedTask, clientId: `upd-${updatedTask.id}` };
+          enqueue(op);
+          supabaseTaskRepo.updateTask(updatedTask).then((ok) => {
+            if (ok) dequeue(op.clientId);
+          });
+        }
+        pushToast(`AI 复核后归入【${QUADRANT_META[refined].label}】`, "info");
+      } catch (err) {
+        console.warn("[FlowMirror] AI 象限复核失败（保留本地判定）：", err);
+      }
+    },
+    [pushToast, tasks]
+  );
 
   const executeCommand = useCallback(
     (cmd: ParsedCommand) => {
       switch (cmd.intent) {
         case "add": {
+          // 象限由 lib/nlp.ts 的本地判定给出（不再一律塞进 q1）；
+          // 内部持久化键通过 QUADRANT_TO_CATEGORY 换算，不在这里硬编码
           const task: Task = {
             id: uid("task"),
             title: cmd.title,
             status: "pending",
-            category: "deep-work",
+            category: quadrantToCategory(cmd.quadrant),
             scheduledTime: cmd.time,
             plannedDuration: 50,
             timeSlices: [],
@@ -479,22 +621,23 @@ export function FlowProvider({ children }: { children: ReactNode }) {
             sops: ["先拆出第一步最小动作", "定时器 25 分钟，先跑一个番茄钟", "完成比完美重要"],
             pitfalls: [],
           };
+          const dateKey = tasksDateRef.current;
           setTasks((prev) => {
             const next = [...prev, task].sort(byScheduledTime);
-            saveSnapshot(next);
+            saveSnapshot(next, tasksDateRef.current);
             return next;
           });
           if (isRemoteMode()) {
-            const op: PendingOp = { type: "insert", task, dateKey: todayKey(), clientId: `ins-${task.id}` };
+            const op: PendingOp = { type: "insert", task, dateKey, clientId: `ins-${task.id}` };
             enqueue(op);
-            supabaseTaskRepo.insertTask(task, todayKey()).then((saved) => {
+            supabaseTaskRepo.insertTask(task, dateKey).then((saved) => {
               if (saved) {
                 dequeue(op.clientId);
                 // 用服务端返回的真实 id 替换本地临时 id
                 suppressRemoteRef.current = true;
                 setTasks((prev) => {
                   const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
-                  saveSnapshot(next);
+                  saveSnapshot(next, tasksDateRef.current);
                   return next;
                 });
                 setTimeout(() => { suppressRemoteRef.current = false; }, 500);
@@ -502,6 +645,8 @@ export function FlowProvider({ children }: { children: ReactNode }) {
             });
           }
           pushToast(cmd.summary, "success");
+          // 没命中任何明确信号时，让 AI 再复核一次象限（命中则无需多此一举）
+          if (!cmd.confident) void refineTaskQuadrant(task.id, task.title, cmd.quadrant);
           break;
         }
         case "reschedule": {
@@ -516,7 +661,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
             };
             setTasks((prev) => {
               const next = prev.map((t) => (t.id === target.id ? updated : t));
-              saveSnapshot(next);
+              saveSnapshot(next, tasksDateRef.current);
               return next;
             });
             if (isRemoteMode()) {
@@ -549,19 +694,20 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           };
           setTasks((prev) => {
             const next = [...prev, task].sort(byScheduledTime);
-            saveSnapshot(next);
+            saveSnapshot(next, tasksDateRef.current);
             return next;
           });
           if (isRemoteMode()) {
-            const op: PendingOp = { type: "insert", task, dateKey: todayKey(), clientId: `ins-${task.id}` };
+            const bhDateKey = tasksDateRef.current;
+            const op: PendingOp = { type: "insert", task, dateKey: bhDateKey, clientId: `ins-${task.id}` };
             enqueue(op);
-            supabaseTaskRepo.insertTask(task, todayKey()).then((saved) => {
+            supabaseTaskRepo.insertTask(task, bhDateKey).then((saved) => {
               if (saved) {
                 dequeue(op.clientId);
                 suppressRemoteRef.current = true;
                 setTasks((prev) => {
                   const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
-                  saveSnapshot(next);
+                  saveSnapshot(next, tasksDateRef.current);
                   return next;
                 });
                 setTimeout(() => { suppressRemoteRef.current = false; }, 500);
@@ -577,7 +723,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           setCareMode(true);
           setTasks((prev) => {
             const next = prev.map((t) => (t.status === "pending" ? { ...t, status: "frozen" as const } : t));
-            saveSnapshot(next);
+            saveSnapshot(next, tasksDateRef.current);
             if (isRemoteMode()) {
               next.filter((t) => t.status === "frozen").forEach((t) => {
                 const op: PendingOp = { type: "update", task: t, clientId: `upd-${t.id}` };
@@ -596,7 +742,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           pushToast(cmd.summary, "info");
       }
     },
-    [pushToast, tasks]
+    [pushToast, tasks, refineTaskQuadrant]
   );
 
   // 直接新增任务到指定象限（灵感转待办、快速入格等场景复用），返回新任务 id
@@ -616,20 +762,21 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       };
       setTasks((prev) => {
         const next = [...prev, task].sort(byScheduledTime);
-        saveSnapshot(next);
+        saveSnapshot(next, tasksDateRef.current);
         return next;
       });
       if (isRemoteMode()) {
-        const op: PendingOp = { type: "insert", task, dateKey: todayKey(), clientId: `ins-${task.id}` };
+        const dateKey = tasksDateRef.current;
+        const op: PendingOp = { type: "insert", task, dateKey, clientId: `ins-${task.id}` };
         enqueue(op);
         try {
-          const saved = await supabaseTaskRepo.insertTask(task, todayKey());
+          const saved = await supabaseTaskRepo.insertTask(task, dateKey);
           if (saved) {
             dequeue(op.clientId);
             suppressRemoteRef.current = true;
             setTasks((prev) => {
               const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
-              saveSnapshot(next);
+              saveSnapshot(next, tasksDateRef.current);
               return next;
             });
             setTimeout(() => { suppressRemoteRef.current = false; }, 500);
@@ -678,7 +825,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       // 1) 先乐观落界面 + 本地快照 —— 点了就必须有反应，云端失败也不留空白
       setTasks((prev) => {
         const next = [...prev, ...created].sort(byScheduledTime);
-        saveSnapshot(next);
+        saveSnapshot(next, tasksDateRef.current);
         return next;
       });
 
@@ -688,7 +835,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       }
 
       // 2) 串行写云端：先入队 → 成功后出队并用真实行替换临时 id
-      const dateKey = todayKey();
+      const dateKey = tasksDateRef.current;
       created.forEach((t) =>
         enqueue({ type: "insert", task: t, dateKey, clientId: `ins-${t.id}` })
       );
@@ -707,7 +854,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
               const next = prev
                 .map((t) => (t.id === task.id ? saved : t))
                 .sort(byScheduledTime);
-              saveSnapshot(next);
+              saveSnapshot(next, tasksDateRef.current);
               return next;
             });
           }
@@ -746,7 +893,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => {
       const next = prev.filter((t) => t.id !== id);
-      saveSnapshot(next);
+      saveSnapshot(next, tasksDateRef.current);
       return next;
     });
     // 关掉可能正指向该任务的详情 / 微复盘抽屉，避免留下指向已删数据的浮层
@@ -773,7 +920,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     setCareMode(false);
     setTasks((prev) => {
       const next = prev.map((t) => (t.status === "frozen" ? { ...t, status: "pending" as const } : t));
-      saveSnapshot(next);
+      saveSnapshot(next, tasksDateRef.current);
       if (isRemoteMode()) {
         next.filter((t) => t.status === "pending").forEach((t) => {
           const op: PendingOp = { type: "update", task: t, clientId: `upd-${t.id}` };
@@ -811,6 +958,9 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     signOut,
     selectedDate,
     setSelectedDate,
+    today,
+    isViewingToday,
+    goToday,
     completeTask,
     closeReview,
     submitReview,

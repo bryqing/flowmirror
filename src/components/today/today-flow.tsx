@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Flame, Snowflake, Swords } from "lucide-react";
+import { CalendarClock, CornerUpLeft, Flame, Snowflake, Swords } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { Button } from "@/components/ui/button";
 import { CommandBar } from "@/components/layout/command-bar";
@@ -12,7 +12,7 @@ import { GlobalDispatchPanel } from "./global-dispatch-panel";
 import { QuickCaptureSheet } from "./quick-capture-sheet";
 
 export function TodayFlow() {
-  const { tasks, careMode, unfreeze } = useFlow();
+  const { tasks, careMode, unfreeze, selectedDate, isViewingToday, goToday } = useFlow();
   // 计数依赖 tasks 状态，而 tasks 在客户端会从本地快照/远程同步后变化，
   // SSR 与客户端首帧数量可能不一致。挂载后再渲染计数，避免 Hydration 警告。
   const [mounted, setMounted] = useState(false);
@@ -47,6 +47,32 @@ export function TodayFlow() {
       {/* 顶部：自然语言调度输入框（静态通栏一行，不悬浮、不插入网格）+ 横向日期胶囊条 */}
       <CommandBar />
       <DateStrip />
+
+      {/* 历史回看横幅：看板与灵感都在展示别的日子时，必须一眼可辨并一键返回 */}
+      {mounted && !isViewingToday && (
+        <div className="glass animate-fade-up flex flex-wrap items-center gap-3 rounded-2xl border-candle/25 p-3.5 glow-candle">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-candle/10">
+            <CalendarClock className="size-4 text-candle" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-candle">
+              历史回看 · <span className="font-mono">{selectedDate}</span>
+            </p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              四象限与灵感流均为该日数据；此时新增的任务会记在这一天。
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={goToday}
+            className="border-candle/30 text-candle hover:bg-candle/10"
+          >
+            <CornerUpLeft className="size-3.5" />
+            回到今天
+          </Button>
+        </div>
+      )}
 
       {/* 中间：晨间金句锚点小卡片 */}
       <MorningAnchor />
