@@ -150,6 +150,11 @@ export function BlackholeDetailDrawer({
             <Timer className="size-3.5 text-cat-blackhole" />
             时段明细 · 逐段溯源
           </p>
+          {slices.length === 0 && (
+            <p className="rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-3.5 py-3 text-[11px] leading-relaxed text-muted-foreground">
+              昨日没有休闲娱乐时段记录 —— 没有失控段可溯源。若你确实刷了视频/打了游戏，去任务卡片上标个时间段或按 ▶ 计时，明天这里就有数据了。
+            </p>
+          )}
           {slices.map((s, i) => {
             const mins = sliceMinutes(s.start, s.end);
             const lessons = relatedLessons(s.label);
@@ -203,11 +208,13 @@ export function BlackholeDetailDrawer({
           })}
         </div>
 
-        {/* AI 警示简评 */}
-        <div className="flex items-start gap-2 rounded-xl border border-cat-blackhole/20 bg-cat-blackhole/[0.05] p-3.5">
-          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-cat-blackhole/90" />
-          <p className="text-[11px] leading-relaxed text-zinc-300">{mirror.blackholeComment}</p>
-        </div>
+        {/* AI 警示简评（无真实失控记录时没有这句，不硬凑） */}
+        {mirror.blackholeComment && (
+          <div className="flex items-start gap-2 rounded-xl border border-cat-blackhole/20 bg-cat-blackhole/[0.05] p-3.5">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-cat-blackhole/90" />
+            <p className="text-[11px] leading-relaxed text-zinc-300">{mirror.blackholeComment}</p>
+          </div>
+        )}
       </div>
     </Sheet>
   );

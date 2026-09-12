@@ -21,7 +21,8 @@ import {
   type TaskCategory,
 } from "@/lib/types";
 import { TODAY_TASKS } from "@/lib/mock-data";
-import { uid } from "@/lib/utils";
+import { fmtDuration, uid } from "@/lib/utils";
+import { isTiming, nowClock, shiftDateKey, sumSliceMinutes } from "@/lib/task-time";
 import {
   getSupabase,
   isSupabaseConfigured,
@@ -77,6 +78,26 @@ interface FlowContextValue {
   isViewingToday: boolean;
   /** 一键回到今天 */
   goToday: () => void;
+  /**
+   * 前一天（相对今天，不跟随 selectedDate）的任务列表。
+   * 昨日之镜的完成率等指标直接由它算出，不读 mock。
+   */
+  yesterdayTasks: Task[];
+  /** 前一天的日期 key "YYYY-MM-DD" */
+  yesterdayDate: string;
+  /** 昨日任务是否已完成加载（本地快照 + 远端尝试都已结束） */
+  yesterdayReady: boolean;
+  /**
+   * 标记任务的时间段（开始时刻 + 时长，分钟）。
+   * 传 undefined 表示清除。**会清空该任务已记录的计时切片**（重新规划语义）。
+   */
+  setTaskTime: (id: string, startClock: string | undefined, durationMin: number | undefined) => void;
+  /** 开始计时：写入一个未闭合的时间切片，任务转为进行中 */
+  startTiming: (id: string) => void;
+  /** 结束计时：闭合切片、累计实际时长，任务回到待办 */
+  stopTiming: (id: string) => void;
+  /** 按当前计时状态自动开始 / 结束 */
+  toggleTiming: (id: string) => void;
   completeTask: (id: string) => void;
   closeReview: () => void;
   submitReview: (id: string, review: Omit<MicroReview, "id" | "createdAt">) => void;
@@ -123,6 +144,10 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const [selectedDate, setSelectedDate] = useState<string>(() => todayKey());
   /** 挂载后校准的「今天」。初值与 selectedDate 同源，SSR 与首帧一致，不产生水合差异 */
   const [today, setToday] = useState<string>(() => todayKey());
+  /** 前一日任务（昨日之镜的数据源）。与 selectedDate 平行，始终是「今天 - 1 天」 */
+  const [yesterdayTasks, setYesterdayTasks] = useState<Task[]>([]);
+  const [yesterdayReady, setYesterdayReady] = useState(false);
+  const yesterdayDate = useMemo(() => shiftDateKey(today, -1), [today]);
 
   /**
    * 看板当前**真实代表**的日期 —— 也就是 `tasks` 数组实际归属的那一天。
@@ -188,6 +213,33 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setToday(t);
   }, []);
+
+  // ---- 加载昨日任务（昨日之镜的真实指标数据源）----
+  //
+  // 与「当前查看日期」的装载刻意分开：昨日之镜永远看的是今天的前一天，
+  // 用户翻到别的历史日期时它不该跟着变，否则「昨日之镜」会显示成上月某天。
+  //
+  // ⚠️ 远端结果只在**非空**时采纳。未登录 / RLS 未命中时 Supabase 返回的是
+  //    空数组而非错误，拿它覆盖本地快照会把用户昨天离线记录的任务抹掉。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    void (async () => {
+      const snap = loadSnapshot(yesterdayDate);
+      if (!cancelled && snap) setYesterdayTasks(snap);
+      if (isSupabaseConfigured()) {
+        const remote = await fetchTasksOrNull(yesterdayDate);
+        if (!cancelled && remote && remote.length > 0) {
+          setYesterdayTasks(remote);
+          saveSnapshot(remote, yesterdayDate);
+        }
+      }
+      if (!cancelled) setYesterdayReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [yesterdayDate, synced]);
 
   // ---- 切换查看日期时拉取该日云端任务（已登录才发）----
   // 快照已在上面同步渲染，这里只做「补齐/纠正」，所以不阻塞首屏、也不闪空列表。
@@ -455,6 +507,117 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const closeReview = useCallback(() => setReviewTaskId(null), []);
+
+  /**
+   * 统一的「改单个任务」出口：本地即时改写 + 快照落盘 + 云端同步（失败入离线队列）。
+   *
+   * 时间轴相关的三个写操作（标记时间段 / 开始计时 / 结束计时）都走这里。
+   * 各自写一遍三件套极易漏环 —— 漏快照则刷新回滚，漏入队则断网丢改动，
+   * 而这两个 bug 都只在「刷新」或「断网」时才暴露，平时完全看不出来。
+   */
+  const commitTask = useCallback((updated: Task) => {
+    setTasks((prev) => {
+      const next = prev.map((t) => (t.id === updated.id ? updated : t)).sort(byScheduledTime);
+      saveSnapshot(next, tasksDateRef.current);
+      return next;
+    });
+    if (isRemoteMode() && SERVER_ID.test(updated.id)) {
+      const op: PendingOp = { type: "update", task: updated, clientId: `upd-${updated.id}` };
+      enqueue(op);
+      supabaseTaskRepo.updateTask(updated).then((ok) => {
+        if (ok) dequeue(op.clientId);
+      });
+    }
+  }, []);
+
+  /**
+   * 标记任务的「时间段」—— 热力大盘的主力数据来源。
+   *
+   * 会清空该任务已记录的计时切片：这个动作的语义是「重新规划这件事占哪段时间」，
+   * 而热力图**优先展示真实切片**；若保留旧切片，用户标记完会发现图形没变，
+   * 只能认为是功能坏了。正在计时中的任务直接拒绝，避免把进行中的计时抹掉。
+   */
+  const setTaskTime = useCallback(
+    (id: string, startClock: string | undefined, durationMin: number | undefined) => {
+      const target = tasks.find((t) => t.id === id);
+      if (!target) return;
+      if (isTiming(target)) {
+        pushToast("该任务正在计时，先结束计时再调整时间段", "warn");
+        return;
+      }
+      const duration = durationMin && durationMin > 0 ? durationMin : undefined;
+      commitTask({
+        ...target,
+        scheduledTime: startClock,
+        plannedDuration: duration,
+        timeSlices: [],
+        actualDuration: undefined,
+      });
+      pushToast(
+        startClock
+          ? `已标记时间段 ${startClock}${duration ? ` · ${fmtDuration(duration)}` : ""}`
+          : "已清除该任务的时间段",
+        startClock ? "success" : "info"
+      );
+    },
+    [tasks, commitTask, pushToast]
+  );
+
+  /** 开始计时：追加一个未闭合切片，任务转为进行中 */
+  const startTiming = useCallback(
+    (id: string) => {
+      const target = tasks.find((t) => t.id === id);
+      if (!target) return;
+      if (target.status === "done") {
+        pushToast("该任务已完成，无需计时", "warn");
+        return;
+      }
+      if (target.status === "frozen") {
+        pushToast("该任务已冷冻，解冻后再计时", "warn");
+        return;
+      }
+      if (isTiming(target)) return; // 已在计时，忽略重复点击
+      commitTask({
+        ...target,
+        status: "in-progress",
+        timeSlices: [...target.timeSlices, { start: nowClock(), end: "", label: target.title }],
+      });
+      pushToast(`开始计时 · ${target.title}`, "info");
+    },
+    [tasks, commitTask, pushToast]
+  );
+
+  /** 结束计时：闭合切片、累计实际时长，任务回到待办（还没做完，只是这段记完了） */
+  const stopTiming = useCallback(
+    (id: string) => {
+      const target = tasks.find((t) => t.id === id);
+      if (!target) return;
+      const index = target.timeSlices.findIndex((s) => Boolean(s.start) && !s.end);
+      if (index < 0) return;
+      const closed = target.timeSlices.map((s, i) =>
+        i === index ? { ...s, end: nowClock() } : s
+      );
+      const recorded = sumSliceMinutes(closed);
+      commitTask({
+        ...target,
+        status: target.status === "done" ? "done" : "pending",
+        timeSlices: closed,
+        actualDuration: recorded,
+      });
+      pushToast(`已记录 ${fmtDuration(recorded)} · ${target.title}`, "success");
+    },
+    [tasks, commitTask, pushToast]
+  );
+
+  const toggleTiming = useCallback(
+    (id: string) => {
+      const target = tasks.find((t) => t.id === id);
+      if (!target) return;
+      if (isTiming(target)) stopTiming(id);
+      else startTiming(id);
+    },
+    [tasks, startTiming, stopTiming]
+  );
 
   const submitReview = useCallback(
     (id: string, review: Omit<MicroReview, "id" | "createdAt">) => {
@@ -961,6 +1124,13 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     today,
     isViewingToday,
     goToday,
+    yesterdayTasks,
+    yesterdayDate,
+    yesterdayReady,
+    setTaskTime,
+    startTiming,
+    stopTiming,
+    toggleTiming,
     completeTask,
     closeReview,
     submitReview,
@@ -1008,10 +1178,6 @@ function translateAuthError(message: string): string {
   if (m.includes("rate limit") || m.includes("too many")) return "操作过于频繁，请稍后再试";
   if (m.includes("network") || m.includes("fetch")) return "网络异常，请检查网络后重试";
   return message;
-}
-
-function nowClock(): string {
-  return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 /** Realtime 推送的 Supabase 行 → 前端 Task 模型（与 repository 保持一致） */

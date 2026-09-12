@@ -8,10 +8,12 @@ import {
   Play,
   Plus,
   Snowflake,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
+import { TaskTimePopover } from "@/components/ui/task-time-popover";
 import {
   CATEGORY_META,
   QUADRANT_META,
@@ -19,6 +21,7 @@ import {
   type Task,
   type TaskCategory,
 } from "@/lib/types";
+import { isTiming, openSliceStart, recordedMinutes, windowLabel } from "@/lib/task-time";
 import { cn, fmtDuration } from "@/lib/utils";
 
 /**
@@ -35,7 +38,8 @@ const RING_COLORS: Record<TaskCategory, string> = {
 };
 
 export function TaskQuadrants() {
-  const { tasks, openDetail, completeTask, addTask, deleteTask, pushToast } = useFlow();
+  const { tasks, openDetail, completeTask, addTask, deleteTask, pushToast, setTaskTime, toggleTiming } =
+    useFlow();
 
   // mounted：SSR 与客户端首帧渲染占位，挂载后再展示动态任务数据，
   // 避免任务列表（本地快照/远程）在首帧与 SSR 不一致导致 Hydration 报错。
@@ -75,7 +79,12 @@ export function TaskQuadrants() {
           <section
             key={category}
             className={cn(
-              "glass glow-edge animate-fade-up flex min-h-[175px] flex-col rounded-2xl p-5",
+              // ⚠️ `min-w-0` 不能删：grid 子项的 `min-width` 默认是 `auto`，
+              // 列宽会被子项的 min-content 顶开。卡片行里有一串 shrink-0 的控件
+              // （打钩 / 时间入口 / 计时 / 删除 / 箭头），min-content 加起来远超
+              // 390px 的手机宽度 → 整页横向滚动（实测 553 > 390）。
+              // 加上它之后列宽改由容器决定（回到 390），卡片行内部再自行收缩。
+              "glass glow-edge animate-fade-up flex min-h-[175px] min-w-0 flex-col rounded-2xl p-5",
               active && category === "blackhole" && "border-cat-blackhole/25",
               active && category !== "blackhole" && "border-cat-deep/20",
               adding && meta.border
@@ -138,6 +147,8 @@ export function TaskQuadrants() {
                     task={task}
                     onOpen={() => openDetail(task.id)}
                     onComplete={() => completeTask(task.id)}
+                    onSetTime={(start, duration) => setTaskTime(task.id, start, duration)}
+                    onToggleTiming={() => toggleTiming(task.id)}
                     onDelete={() => {
                       deleteTask(task.id);
                       pushToast(`已删除「${task.title}」`, "info");
@@ -309,11 +320,15 @@ function TaskChip({
   task,
   onOpen,
   onComplete,
+  onSetTime,
+  onToggleTiming,
   onDelete,
 }: {
   task: Task;
   onOpen: () => void;
   onComplete: () => void;
+  onSetTime: (startClock: string | undefined, durationMin: number | undefined) => void;
+  onToggleTiming: () => void;
   onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -322,6 +337,11 @@ function TaskChip({
   const done = task.status === "done";
   const running = task.status === "in-progress";
   const isBlackhole = task.category === "blackhole";
+  /** 是否正在计时（存在未闭合的时间切片） */
+  const timing = isTiming(task);
+  const timingSince = openSliceStart(task);
+  /** 已记录时长（真实计时累计） */
+  const recorded = recordedMinutes(task);
 
   if (confirming) {
     return (
@@ -351,7 +371,13 @@ function TaskChip({
       role="button"
       tabIndex={0}
       onClick={onOpen}
-      onKeyDown={(e) => e.key === "Enter" && onOpen()}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter") return;
+        // 卡片里嵌了时间段入口、计时、打钩、删除等控件，它们自己会处理 Enter；
+        // 只有焦点落在卡片本体时才打开详情，否则会在抽屉里再叠一层。
+        if (e.target !== e.currentTarget) return;
+        onOpen();
+      }}
       className={cn(
         "group -mx-2 flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-2.5 transition-colors duration-200",
         "hover:bg-white/[0.04]",
@@ -380,14 +406,15 @@ function TaskChip({
         <Check className="size-2.5" strokeWidth={3.5} />
       </button>
 
-      <span
-        className={cn(
-          "shrink-0 font-mono text-[10px] tabular-nums",
-          done ? "text-zinc-500 line-through" : "text-zinc-400"
-        )}
-      >
-        {task.scheduledTime ?? "--:--"}
-      </span>
+      {/* 时间段入口：既显示窗口，也是热力大盘的数据来源（点击可改） */}
+      <TaskTimePopover
+        value={task.scheduledTime}
+        duration={task.plannedDuration}
+        label={windowLabel(task)}
+        onChange={onSetTime}
+        disabled={frozen}
+        className={done ? "line-through opacity-70" : undefined}
+      />
 
       <span
         className={cn(
@@ -398,14 +425,58 @@ function TaskChip({
         {task.title}
       </span>
 
+      {/* 轻量计时：开始 / 结束，结束时累计进 actualDuration 并驱动热力大盘 */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleTiming();
+        }}
+        disabled={frozen || done}
+        aria-label={timing ? `结束计时「${task.title}」` : `开始计时「${task.title}」`}
+        title={timing ? "结束计时" : "开始计时"}
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center rounded-md transition-colors",
+          timing
+            ? "bg-cat-deep/20 text-cat-deep hover:bg-cat-deep/30"
+            : "text-subtle-foreground/70 hover:bg-cat-deep/15 hover:text-cat-deep",
+          (frozen || done) && "cursor-not-allowed opacity-40"
+        )}
+      >
+        {timing ? <Square className="size-3 fill-current" /> : <Play className="size-3.5" />}
+      </button>
+
       {frozen && <Snowflake className="size-3 shrink-0 text-cat-chore" />}
-      {running && !isBlackhole && <Play className="size-3 shrink-0 text-cat-deep" />}
-      {running && isBlackhole && (
-        <span className="flex shrink-0 items-center gap-1 text-[10px] text-cat-blackhole">
-          <span className="size-1.5 animate-pulse-dot rounded-full bg-cat-blackhole" />
-          计时中
+
+      {/* 暂停/进行中标识 */}
+      {running && !timing && !isBlackhole && <Play className="size-3 shrink-0 text-cat-deep" />}
+      {timing && (
+        <span
+          className={cn(
+            "flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums",
+            isBlackhole ? "text-cat-blackhole" : "text-cat-deep"
+          )}
+          title={`自 ${timingSince} 起计时中`}
+        >
+          <span
+            className={cn(
+              "size-1.5 animate-pulse-dot rounded-full",
+              isBlackhole ? "bg-cat-blackhole" : "bg-cat-deep"
+            )}
+          />
+          计时{timingSince ? ` ${timingSince}` : "中"}
         </span>
       )}
+
+      {/* 已记录时长（非计时状态下展示真实累计） */}
+      {!timing && recorded > 0 && (
+        <span
+          className="shrink-0 rounded bg-white/[0.06] px-1 py-px font-mono text-[9px] tabular-nums text-zinc-400"
+          title={`已记录 ${fmtDuration(recorded)}`}
+        >
+          已记{fmtDuration(recorded)}
+        </span>
+      )}
+
       {done && task.microReviews.length > 0 && (
         <span className="shrink-0 rounded bg-cat-rest/15 px-1 py-px text-[9px] text-cat-rest">已复盘</span>
       )}
