@@ -15,6 +15,7 @@ import { useFlow } from "@/components/flow-context";
 import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { DarkSelect, type DarkSelectOption } from "@/components/ui/dark-select";
 import { useSpeech } from "@/lib/use-speech";
 import {
   CATEGORY_META,
@@ -57,6 +58,18 @@ interface DraftTask {
 
 /** 优先级排序权重：高优先排前面，导入后看板内顺序即优先序 */
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = { high: 0, medium: 1, low: 2 };
+
+/** 象限下拉项：编号 + 名称，左侧带该象限的分类色点 */
+const QUADRANT_OPTIONS: DarkSelectOption<Quadrant>[] = QUADRANT_ORDER.map((q) => ({
+  value: q,
+  label: `${q.toUpperCase()} ${QUADRANT_META[q].label}`,
+  dot: CATEGORY_META[QUADRANT_META[q].category].dot,
+}));
+
+/** 优先级下拉项 */
+const PRIORITY_OPTIONS: DarkSelectOption<TaskPriority>[] = (
+  ["high", "medium", "low"] as TaskPriority[]
+).map((p) => ({ value: p, label: `${PRIORITY_META[p].label}优先` }));
 
 const PLACEHOLDER = `把脑子里盘旋的事一股脑倒进来，AI 会拆成任务并归入四象限：
 
@@ -408,37 +421,27 @@ export function QuickCaptureSheet() {
                       </div>
 
                       <div className="mt-2 flex items-center gap-2">
-                        <select
+                        <DarkSelect
                           value={d.quadrant}
-                          onChange={(e) =>
-                            updateDraft(d.key, { quadrant: e.target.value as Quadrant })
-                          }
+                          options={QUADRANT_OPTIONS}
+                          onChange={(q) => updateDraft(d.key, { quadrant: q })}
                           disabled={importing}
                           title={QUADRANT_META[d.quadrant].definition}
-                          className="min-w-0 flex-1 appearance-none rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1.5 text-[11px] text-foreground outline-none transition-colors hover:border-white/20 focus:border-cat-deep/40 disabled:opacity-60"
-                        >
-                          {QUADRANT_ORDER.map((q) => (
-                            <option key={q} value={q}>
-                              {q.toUpperCase()} {QUADRANT_META[q].label}
-                            </option>
-                          ))}
-                        </select>
+                          ariaLabel="选择象限"
+                          className="flex-1"
+                          menuMinWidth={168}
+                        />
 
-                        <select
+                        <DarkSelect
                           value={d.priority}
-                          onChange={(e) =>
-                            updateDraft(d.key, { priority: e.target.value as TaskPriority })
-                          }
+                          options={PRIORITY_OPTIONS}
+                          onChange={(p) => updateDraft(d.key, { priority: p })}
                           disabled={importing}
                           title="优先级仅用于导入时的排序建议，暂不入库"
-                          className="w-[92px] shrink-0 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1.5 text-[11px] text-foreground outline-none transition-colors hover:border-white/20 focus:border-cat-deep/40 disabled:opacity-60"
-                        >
-                          {(["high", "medium", "low"] as TaskPriority[]).map((p) => (
-                            <option key={p} value={p}>
-                              {PRIORITY_META[p].label}优先
-                            </option>
-                          ))}
-                        </select>
+                          ariaLabel="选择优先级"
+                          className="w-[92px] shrink-0"
+                          menuMinWidth={92}
+                        />
                       </div>
                     </li>
                   );

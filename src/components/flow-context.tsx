@@ -76,6 +76,8 @@ interface FlowContextValue {
     items: { title: string; category: TaskCategory }[],
     onProgress?: (done: number, total: number) => void
   ) => Promise<number>;
+  /** 删除任务：本地即时移除并同步云端；未落库的临时任务会撤销其待补录操作 */
+  deleteTask: (id: string) => void;
   unfreeze: () => void;
   openDetail: (id: string) => void;
   closeDetail: () => void;
@@ -265,12 +267,21 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       await attachRemoteSession(userId, email);
     })();
 
-    // 监听认证状态变化（登录 / 登出 / 令牌刷新）——保证密码登录后立即拉取云端数据
+    // 监听认证状态变化（登录 / 登出 / 令牌刷新）——保证密码登录后立即拉取云端数据。
+    //
+    // ⚠️ 必须区分「从未登录」与「从登录态退出」：
+    //    supabase-js 在 subscribe 的瞬间会补发一次 INITIAL_SESSION，未登录时其 session 为 null。
+    //    若此时直接走 detachRemoteSession()，会把上面 effect 刚从本地快照恢复出来的任务
+    //    重新覆盖成演示数据（TODAY_TASKS）—— 表现为「离线期间的增删改，一刷新就全部丢失」。
+    //    只有真正经历过登录再登出，才该回退演示数据（顺带避免把账号数据留在登出后的界面上）。
+    let hadSession = false;
     const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (cancelled) return;
       if (session?.user) {
+        hadSession = true;
         void attachRemoteSession(session.user.id, session.user.email ?? null);
-      } else {
+      } else if (hadSession) {
+        hadSession = false;
         detachRemoteSession();
       }
     });
@@ -611,17 +622,23 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       if (isRemoteMode()) {
         const op: PendingOp = { type: "insert", task, dateKey: todayKey(), clientId: `ins-${task.id}` };
         enqueue(op);
-        const saved = await supabaseTaskRepo.insertTask(task, todayKey());
-        if (saved) {
-          dequeue(op.clientId);
-          suppressRemoteRef.current = true;
-          setTasks((prev) => {
-            const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
-            saveSnapshot(next);
-            return next;
-          });
-          setTimeout(() => { suppressRemoteRef.current = false; }, 500);
-          return saved.id;
+        try {
+          const saved = await supabaseTaskRepo.insertTask(task, todayKey());
+          if (saved) {
+            dequeue(op.clientId);
+            suppressRemoteRef.current = true;
+            setTasks((prev) => {
+              const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
+              saveSnapshot(next);
+              return next;
+            });
+            setTimeout(() => { suppressRemoteRef.current = false; }, 500);
+            return saved.id;
+          }
+        } catch (err) {
+          // 网络异常不能让调用方炸掉：任务已乐观落界面 + 入队，
+          // 网络恢复后会由 flushQueue 自动补录（与 addTasks 的逐条 try/catch 一致）。
+          console.warn("[FlowMirror] 新增任务云端写入异常（保留离线队列待补录）：", err);
         }
       }
       return task.id;
@@ -715,6 +732,43 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     [pushToast]
   );
 
+  /**
+   * 删除任务。
+   *
+   * 三个容易踩的点：
+   *  1) 本地必须**立刻**移除 —— 删除是用户明确表达的意图，不能等云端回执，
+   *     否则慢网络下会出现「点了没反应」。快照同步落盘保证刷新后不复现。
+   *  2) 若该任务尚未成功写入云端（仍在离线队列里，id 还是本地临时 id），
+   *     必须把它的 insert 操作一并撤销；否则网络恢复后补录会把它「复活」。
+   *  3) 只有服务端 uuid 才值得发起远端删除。本地临时 id（`task-xxx`）打给
+   *     Supabase 会因 uuid 解析失败而报错，失败操作会永久留在队列里反复重试。
+   */
+  const deleteTask = useCallback((id: string) => {
+    setTasks((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      saveSnapshot(next);
+      return next;
+    });
+    // 关掉可能正指向该任务的详情 / 微复盘抽屉，避免留下指向已删数据的浮层
+    setDetailTaskId((cur) => (cur === id ? null : cur));
+    setReviewTaskId((cur) => (cur === id ? null : cur));
+
+    if (!isRemoteMode()) return;
+
+    const pendingInsert = loadQueue().find((op) => op.type === "insert" && op.task.id === id);
+    if (pendingInsert) {
+      dequeue(pendingInsert.clientId); // 还没落库：撤销补录即可，无需远端删除
+      return;
+    }
+    if (!SERVER_ID.test(id)) return;
+
+    const op: PendingOp = { type: "delete", id, clientId: `del-${id}` };
+    enqueue(op);
+    supabaseTaskRepo.deleteTask(id).then((ok) => {
+      if (ok) dequeue(op.clientId);
+    });
+  }, []);
+
   const unfreeze = useCallback(() => {
     setCareMode(false);
     setTasks((prev) => {
@@ -763,6 +817,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     executeCommand,
     addTask,
     addTasks,
+    deleteTask,
     unfreeze,
     openDetail,
     closeDetail,
@@ -781,6 +836,13 @@ export function useFlow() {
 function byScheduledTime(a: Task, b: Task): number {
   return (a.scheduledTime ?? "99:99").localeCompare(b.scheduledTime ?? "99:99");
 }
+
+/**
+ * 服务端主键（Supabase uuid）判定。
+ * 本地乐观新增的任务 id 形如 `task-lx9f2k`，直接拿去打 Supabase 会因 uuid
+ * 解析失败而报错，失败的操作会一直滞留在离线队列里被反复重试。
+ */
+const SERVER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Supabase Auth 英文错误 → 中文提示（覆盖常见登录/注册场景） */
 function translateAuthError(message: string): string {

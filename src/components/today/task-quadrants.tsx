@@ -1,7 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, ChevronRight, Play, Snowflake } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Check,
+  ChevronRight,
+  Loader2,
+  Play,
+  Plus,
+  Snowflake,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import {
   CATEGORY_META,
@@ -26,7 +35,7 @@ const RING_COLORS: Record<TaskCategory, string> = {
 };
 
 export function TaskQuadrants() {
-  const { tasks, openDetail, completeTask } = useFlow();
+  const { tasks, openDetail, completeTask, addTask, deleteTask, pushToast } = useFlow();
 
   // mounted：SSR 与客户端首帧渲染占位，挂载后再展示动态任务数据，
   // 避免任务列表（本地快照/远程）在首帧与 SSR 不一致导致 Hydration 报错。
@@ -35,6 +44,20 @@ export function TaskQuadrants() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
+
+  // 正在就地录入的象限。全局只允许一个，避免多个输入框同时抢焦点。
+  const [addingIn, setAddingIn] = useState<TaskCategory | null>(null);
+
+  const handleAdd = async (title: string, category: TaskCategory) => {
+    try {
+      await addTask(title, category);
+      pushToast(`已添加到「${CATEGORY_META[category].label}」`, "success");
+    } catch (err) {
+      // addTask 已先落本地 + 入离线队列，网络异常只意味着延后同步，不是失败
+      console.warn("[FlowMirror] 新增任务云端同步异常（已入离线队列待补录）：", err);
+      pushToast("任务已加入看板，云端稍后自动补录", "warn");
+    }
+  };
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -46,6 +69,7 @@ export function TaskQuadrants() {
         const doneCount = list.filter((t) => t.status === "done").length;
         const progress = list.length > 0 ? doneCount / list.length : 0;
         const active = list.some((t) => t.status === "in-progress");
+        const adding = addingIn === category;
 
         return (
           <section
@@ -53,11 +77,12 @@ export function TaskQuadrants() {
             className={cn(
               "glass glow-edge animate-fade-up flex min-h-[175px] flex-col rounded-2xl p-5",
               active && category === "blackhole" && "border-cat-blackhole/25",
-              active && category !== "blackhole" && "border-cat-deep/20"
+              active && category !== "blackhole" && "border-cat-deep/20",
+              adding && meta.border
             )}
             style={{ animationDelay: `${qi * 0.07}s` }}
           >
-            {/* 象限头：编号 Q1~Q4 + 名称 + 计数 + 计划时长 + 右上角圆环进度圈 */}
+            {/* 象限头：编号 Q1~Q4 + 名称 + 计数 + 计划时长 + 象限内新增 + 完成率圆环 */}
             <header className="flex min-h-[36px] items-center gap-2 px-1 pb-4">
               <span className={cn("size-2 rounded-full", meta.dot, active && "animate-pulse-dot")} />
               <p className={cn("flex items-baseline gap-1.5 text-xs font-semibold tracking-tight", meta.text)}>
@@ -70,6 +95,22 @@ export function TaskQuadrants() {
               <span className="ml-auto font-mono text-[10px] text-zinc-400">
                 {mounted ? (total > 0 ? fmtDuration(total) : hint) : hint}
               </span>
+              <button
+                onClick={() => setAddingIn((cur) => (cur === category ? null : category))}
+                aria-label={`在「${meta.label}」中添加任务`}
+                aria-expanded={adding}
+                title={`在「${meta.label}」中添加任务`}
+                className={cn(
+                  "flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
+                  adding
+                    ? cn(meta.border, meta.bg, meta.text)
+                    : "border-white/10 text-subtle-foreground hover:border-white/25 hover:text-foreground"
+                )}
+              >
+                <Plus
+                  className={cn("size-3 transition-transform duration-200", adding && "rotate-45")}
+                />
+              </button>
               <RingProgress
                 value={mounted ? progress : 0}
                 color={RING_COLORS[category]}
@@ -97,12 +138,118 @@ export function TaskQuadrants() {
                     task={task}
                     onOpen={() => openDetail(task.id)}
                     onComplete={() => completeTask(task.id)}
+                    onDelete={() => {
+                      deleteTask(task.id);
+                      pushToast(`已删除「${task.title}」`, "info");
+                    }}
                   />
                 ))}
+
+              {/* 就地新增：仅当前展开的象限渲染，回车即存并可连续录入 */}
+              {adding && (
+                <AddTaskRow
+                  accentBorder={meta.border}
+                  accentDot={meta.dot}
+                  onCancel={() => setAddingIn(null)}
+                  onSubmit={(title) => handleAdd(title, category)}
+                />
+              )}
             </div>
           </section>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * 象限内就地新增任务行。
+ *
+ * 保存成功后**保持展开并清空输入、重新聚焦** —— 连续录入多条时不必反复点加号；
+ * 结束时按 ESC 或点已变成 × 的按钮收起。
+ *
+ * ⚠️ 清空必须发生在 `await` **之前**：云端写入要走一次网络往返（国内经同源代理
+ * 通常数百毫秒），若等回执再清空，用户在等待期间敲下的下一条会被一并抹掉。
+ * 任务本身是乐观落进看板的，先清空不会有"点了没反应"的问题。
+ */
+function AddTaskRow({
+  accentBorder,
+  accentDot,
+  onCancel,
+  onSubmit,
+}: {
+  accentBorder: string;
+  accentDot: string;
+  onCancel: () => void;
+  onSubmit: (title: string) => Promise<void>;
+}) {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const submit = async () => {
+    const title = value.trim();
+    if (!title) return;
+    setValue(""); // 先清空，保证能立刻录下一条
+    setSaving(true);
+    try {
+      await onSubmit(title);
+    } catch (err) {
+      // 兜底：内容还给用户，不让他白打一遍（正常路径下 addTask 不会抛）
+      console.warn("[FlowMirror] 就地新增失败：", err);
+      setValue((cur) => (cur.trim().length === 0 ? title : cur));
+    } finally {
+      setSaving(false);
+      inputRef.current?.focus();
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 rounded-xl border bg-white/[0.04] px-2 py-1.5",
+        accentBorder
+      )}
+    >
+      <span className={cn("size-1.5 shrink-0 rounded-full", accentDot)} />
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void submit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        placeholder="输入任务标题，回车保存"
+        maxLength={120}
+        className="min-w-0 flex-1 bg-transparent py-0.5 text-xs text-foreground outline-none placeholder:text-subtle-foreground"
+      />
+      <button
+        onClick={() => void submit()}
+        disabled={value.trim().length === 0}
+        aria-label="保存任务"
+        title="保存（回车）"
+        className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-cat-rest/15 hover:text-cat-rest disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-subtle-foreground"
+      >
+        {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+      </button>
+      <button
+        onClick={onCancel}
+        aria-label="取消添加"
+        title="取消（ESC）"
+        className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+      >
+        <X className="size-3.5" />
+      </button>
     </div>
   );
 }
@@ -151,19 +298,53 @@ function RingProgress({
   );
 }
 
+/**
+ * 任务芯片。
+ *
+ * 删除采用**行内二次确认**而非 window.confirm：任务可能挂着微复盘、
+ * 时间切片等不可再生数据，误删代价高；而原生弹窗会打断视觉风格。
+ * 确认态直接复用同一条目占位，不撑高卡片，也不会造成列表跳动。
+ */
 function TaskChip({
   task,
   onOpen,
   onComplete,
+  onDelete,
 }: {
   task: Task;
   onOpen: () => void;
   onComplete: () => void;
+  onDelete: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
+
   const frozen = task.status === "frozen";
   const done = task.status === "done";
   const running = task.status === "in-progress";
   const isBlackhole = task.category === "blackhole";
+
+  if (confirming) {
+    return (
+      <div className="-mx-2 flex items-center gap-2 rounded-lg border border-cat-blackhole/30 bg-cat-blackhole/[0.08] px-2 py-2.5">
+        <Trash2 className="size-3.5 shrink-0 text-cat-blackhole" />
+        <span className="min-w-0 flex-1 truncate text-[11px] text-cat-blackhole/90">
+          删除「{task.title}」？
+        </span>
+        <button
+          onClick={onDelete}
+          className="shrink-0 rounded-md bg-cat-blackhole/15 px-2 py-1 text-[10px] font-medium text-cat-blackhole transition-colors hover:bg-cat-blackhole/25"
+        >
+          删除
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          className="shrink-0 rounded-md px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+        >
+          取消
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -228,6 +409,19 @@ function TaskChip({
       {done && task.microReviews.length > 0 && (
         <span className="shrink-0 rounded bg-cat-rest/15 px-1 py-px text-[9px] text-cat-rest">已复盘</span>
       )}
+
+      {/* 删除入口：常显（移动端无悬浮态，靠 hover 才出现等于不可用） */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setConfirming(true);
+        }}
+        aria-label={`删除任务「${task.title}」`}
+        title="删除任务"
+        className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-blackhole/15 hover:text-cat-blackhole"
+      >
+        <Trash2 className="size-3.5" />
+      </button>
 
       <ChevronRight className="size-3.5 shrink-0 text-subtle-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </div>
