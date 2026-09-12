@@ -3,16 +3,19 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronRight, Play, Snowflake } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
-import { CATEGORY_META, type Task, type TaskCategory } from "@/lib/types";
+import {
+  CATEGORY_META,
+  QUADRANT_META,
+  QUADRANT_ORDER,
+  type Task,
+  type TaskCategory,
+} from "@/lib/types";
 import { cn, fmtDuration } from "@/lib/utils";
 
-/** 四象限顺序：深度工作 → 日常杂务 → 娱乐黑洞 → 休息恢复 */
-const QUADRANTS: { category: TaskCategory; hint: string }[] = [
-  { category: "deep-work", hint: "高价值产出，优先保护" },
-  { category: "chore", hint: "批量处理，限时收口" },
-  { category: "blackhole", hint: "计划外黑洞，到点刹车" },
-  { category: "rest", hint: "主动恢复，不带手机" },
-];
+/**
+ * 四象限看板顺序与文案统一由 QUADRANT_META 提供（q1 紧急重要 → q4 休闲娱乐），
+ * 这里不再本地维护名称，避免出现第二份文案源。
+ */
 
 /** 圆环进度圈配色（与分类令牌一致） */
 const RING_COLORS: Record<TaskCategory, string> = {
@@ -35,7 +38,8 @@ export function TaskQuadrants() {
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      {QUADRANTS.map(({ category, hint }, qi) => {
+      {QUADRANT_ORDER.map((q, qi) => {
+        const { category, hint } = QUADRANT_META[q];
         const meta = CATEGORY_META[category];
         const list = tasks.filter((t) => t.category === category);
         const total = list.reduce((sum, t) => sum + (t.plannedDuration ?? 0), 0);
@@ -53,10 +57,13 @@ export function TaskQuadrants() {
             )}
             style={{ animationDelay: `${qi * 0.07}s` }}
           >
-            {/* 象限头：名称 + 计数 + 计划时长 + 右上角圆环进度圈（与标题水平居中对齐） */}
+            {/* 象限头：编号 Q1~Q4 + 名称 + 计数 + 计划时长 + 右上角圆环进度圈 */}
             <header className="flex min-h-[36px] items-center gap-2 px-1 pb-4">
               <span className={cn("size-2 rounded-full", meta.dot, active && "animate-pulse-dot")} />
-              <p className={cn("text-xs font-semibold tracking-tight", meta.text)}>{meta.label}</p>
+              <p className={cn("flex items-baseline gap-1.5 text-xs font-semibold tracking-tight", meta.text)}>
+                <span className="font-mono text-[10px] font-normal opacity-60">{q.toUpperCase()}</span>
+                {meta.label}
+              </p>
               <span className="rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10px] text-zinc-400">
                 {mounted ? list.length : 0}
               </span>

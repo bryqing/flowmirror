@@ -3,16 +3,16 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, ArrowRight } from "lucide-react";
-import { CATEGORY_META, type TaskCategory } from "@/lib/types";
+import { CATEGORY_META, QUADRANT_META, QUADRANT_ORDER, type TaskCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-/** 四象限顺序（对应 P1-P4） */
-const QUADRANTS: { key: TaskCategory; p: string; hint: string }[] = [
-  { key: "deep-work", p: "P1", hint: "重要且紧急 · 深度工作" },
-  { key: "chore", p: "P2", hint: "重要不紧急 · 日常杂务" },
-  { key: "blackhole", p: "P3", hint: "紧急不重要 · 娱乐黑洞" },
-  { key: "rest", p: "P4", hint: "不紧急不重要 · 休息恢复" },
-];
+/** 四象限顺序（编号与文案统一取自 QUADRANT_META，勿在此重复维护名称） */
+const QUADRANTS = QUADRANT_ORDER.map((q) => ({
+  key: QUADRANT_META[q].category,
+  number: q.toUpperCase(),
+  label: QUADRANT_META[q].label,
+  hint: QUADRANT_META[q].hint,
+}));
 
 interface TaskPickerDialogProps {
   open: boolean;
@@ -116,8 +116,8 @@ export function TaskPickerDialog({ open, title, onClose, onPick }: TaskPickerDia
                   <span className={cn("size-2 shrink-0 rounded-full", meta.dot)} />
                   <div className="min-w-0 flex-1">
                     <p className={cn("text-sm font-medium", meta.text)}>
-                      <span className="mr-1.5 font-mono text-[10px] opacity-70">{q.p}</span>
-                      {meta.label}
+                      <span className="mr-1.5 font-mono text-[10px] opacity-70">{q.number}</span>
+                      {q.label}
                     </p>
                     <p className="text-[11px] text-subtle-foreground">{q.hint}</p>
                   </div>

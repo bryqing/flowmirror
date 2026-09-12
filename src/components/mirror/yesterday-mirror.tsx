@@ -187,7 +187,7 @@ export function YesterdayMirror() {
             <p className="text-sm font-semibold text-zinc-100">
               完成率 {pct}%
               <span className="ml-2 text-xs font-normal text-zinc-400">
-                {m.doneCount}/{m.totalCount} 项 · 深度工作 {fmtDuration(m.deepWorkMinutes)}
+                {m.doneCount}/{m.totalCount} 项 · 紧急重要 {fmtDuration(m.deepWorkMinutes)}
               </span>
             </p>
             <p className="mt-1.5 text-xs leading-relaxed text-zinc-300">{m.overallComment}</p>

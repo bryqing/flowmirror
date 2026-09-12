@@ -5,6 +5,9 @@ import {
   notConfiguredResponse,
   toSseResponse,
 } from "@/lib/deepseek";
+import { CATEGORY_META, type TaskCategory } from "@/lib/types";
+
+/** 象限中文标签 —— 统一取自 CATEGORY_META，勿再本地硬编码 */
 
 /** 直接返回一段静态 SSE 文本（不调用模型） */
 function staticSse(text: string): Response {
@@ -61,13 +64,8 @@ export async function POST(request: NextRequest) {
 
   const summary = pending
     .map((t: { title?: string; category?: string; plannedDuration?: number }) => {
-      const catLabel: Record<string, string> = {
-        "deep-work": "深度工作",
-        chore: "日常杂务",
-        blackhole: "娱乐黑洞",
-        rest: "休息恢复",
-      };
-      return `- ${t.title ?? "未命名"}（${catLabel[t.category ?? ""] ?? t.category ?? "未分类"}，计划 ${t.plannedDuration ?? "?"} 分钟）`;
+      const cat = CATEGORY_META[t.category as TaskCategory]?.label ?? t.category ?? "未分类";
+      return `- ${t.title ?? "未命名"}（${cat}，计划 ${t.plannedDuration ?? "?"} 分钟）`;
     })
     .join("\n");
 

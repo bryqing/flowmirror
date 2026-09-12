@@ -175,7 +175,7 @@ function intentLabel(intent?: string) {
   switch (intent) {
     case "add": return "新增任务";
     case "reschedule": return "改期顺延";
-    case "blackhole": return "黑洞计时";
+    case "blackhole": return "休闲娱乐计时";
     case "fuse": return "熔断关怀";
     default: return "试试";
   }

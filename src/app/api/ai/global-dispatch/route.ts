@@ -5,14 +5,26 @@ import {
   notConfiguredResponse,
   toSseResponse,
 } from "@/lib/deepseek";
+import {
+  CATEGORY_META,
+  QUADRANT_META,
+  QUADRANT_ORDER,
+  type TaskCategory,
+} from "@/lib/types";
 
-/** 象限中文标签 */
-const CAT_LABEL: Record<string, string> = {
-  "deep-work": "深度工作",
-  chore: "日常杂务",
-  blackhole: "娱乐黑洞",
-  rest: "休息恢复",
-};
+/**
+ * 象限中文标签 —— 统一取自 lib/types.ts 的 CATEGORY_META，
+ * 避免各处硬编码副本在改名后失同步。
+ */
+function catLabel(category?: string): string {
+  const meta = CATEGORY_META[category as TaskCategory];
+  return meta?.label ?? category ?? "未分类";
+}
+
+/** 供模型对齐的四象限图例，如「Q1 紧急重要 / Q2 日常工作 / …」 */
+const QUADRANT_LEGEND = QUADRANT_ORDER.map(
+  (q) => `${q.toUpperCase()} ${QUADRANT_META[q].label}`
+).join(" / ");
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "待办",
@@ -98,7 +110,7 @@ export async function POST(request: NextRequest) {
 
   // 组装完整任务画像供模型研判
   const lines = tasks.map((t, i) => {
-    const cat = CAT_LABEL[t.category ?? ""] ?? t.category ?? "未分类";
+    const cat = catLabel(t.category);
     const status = STATUS_LABEL[t.status ?? ""] ?? t.status ?? "未知";
     const plan = t.plannedDuration ? `，计划 ${t.plannedDuration} 分钟` : "";
     const actual =
@@ -111,9 +123,10 @@ export async function POST(request: NextRequest) {
 
   const system = [
     "你是 FlowMirror 的「全局战局 AI 调度分析」——一个专业、务实、有战场直觉的战术指挥官。",
-    "你基于用户当前四象限任务列表做全局调度研判，必须严格按以下三个维度输出，每个维度用中文方括号标题【战局诊断】【行动序列】【熔断建议】分段，正文用简洁的短句/短列表。",
-    "①【战局诊断】：判断四象限负载是否合理，是否存在「精力透支」（深度工作过载、无恢复项）或「避重就轻」（杂务/黑洞占比过高而深度任务被搁置）。要具体点出失衡的象限。",
-    "②【行动序列】：给出接下来 2~4 步的具体冲刺顺序，串联具体任务标题与番茄节奏（如「先用 25 分钟聚焦 X，休息 5 分钟后再推进 Y」）。只安排 active（待办/进行中）任务，不要调度已完成项。",
+    `你基于用户当前四象限任务列表做全局调度研判。四象限定义：${QUADRANT_LEGEND}。`,
+    "必须严格按以下三个维度输出，每个维度用中文方括号标题【战局诊断】【行动序列】【熔断建议】分段，正文用简洁的短句/短列表。",
+    "①【战局诊断】：判断四象限负载是否合理，是否存在「精力透支」（Q1 紧急重要过载、无 Q4 休闲娱乐作为恢复）或「避重就轻」（Q2/Q4 占比过高而 Q1 的关键事项被搁置）。要具体点出失衡的象限。",
+    "②【行动序列】：给出接下来 2~4 步的具体冲刺顺序，串联具体任务标题与番茄节奏（如「先用 25 分钟聚焦 X，休息 5 分钟后再推进 Y」）。只安排待办/进行中的任务，不要调度已完成项。",
     "③【熔断建议】：明确指出一项该果断放弃或冷冻的低价值、高摩擦任务，并给一句理由。若无明显该断的，就说「本次无需熔断」并说明为什么。",
     "要求：只输出纯文本，不堆砌 Markdown 符号；语气果断、务实，像战场简报，不鸡汤不废话；总长度控制在 400 字以内。",
   ].join("\n");

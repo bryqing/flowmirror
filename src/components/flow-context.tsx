@@ -68,6 +68,14 @@ interface FlowContextValue {
   executeCommand: (cmd: ParsedCommand) => void;
   /** 直接新增任务到指定象限，返回新任务 id（供「灵感转待办」等场景复用） */
   addTask: (title: string, category: TaskCategory) => Promise<string>;
+  /**
+   * 批量新增任务（AI 战局速记导入用）。
+   * 返回实际受理的条数；`onProgress(done, total)` 用于渲染导入进度。
+   */
+  addTasks: (
+    items: { title: string; category: TaskCategory }[],
+    onProgress?: (done: number, total: number) => void
+  ) => Promise<number>;
   unfreeze: () => void;
   openDetail: (id: string) => void;
   closeDetail: () => void;
@@ -621,6 +629,92 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  /**
+   * 批量新增任务（AI 战局速记「确认导入」）。
+   *
+   * 与单条 addTask 同一套降级策略，但云端写入**串行**而非批量 insert：
+   * batch insert 的返回行顺序没有可靠保证，一旦与请求顺序错位，
+   * 本地任务就会持有别人的服务端 id —— 之后任何更新/删除都会打错行。
+   * 串行慢一点，但每一条都能拿到确定的 id。
+   */
+  const addTasks = useCallback(
+    async (
+      items: { title: string; category: TaskCategory }[],
+      onProgress?: (done: number, total: number) => void
+    ): Promise<number> => {
+      const list = items.filter((it) => it.title.trim().length > 0);
+      if (list.length === 0) return 0;
+
+      const created: Task[] = list.map((it) => ({
+        id: uid("task"),
+        title: it.title.trim(),
+        status: "pending",
+        category: it.category,
+        plannedDuration: 50,
+        timeSlices: [],
+        microReviews: [],
+        insights: [],
+        sops: ["先拆出第一步最小动作", "定时器 25 分钟，先跑一个番茄钟", "完成比完美重要"],
+        pitfalls: [],
+      }));
+
+      // 1) 先乐观落界面 + 本地快照 —— 点了就必须有反应，云端失败也不留空白
+      setTasks((prev) => {
+        const next = [...prev, ...created].sort(byScheduledTime);
+        saveSnapshot(next);
+        return next;
+      });
+
+      if (!isRemoteMode()) {
+        onProgress?.(created.length, created.length);
+        return created.length;
+      }
+
+      // 2) 串行写云端：先入队 → 成功后出队并用真实行替换临时 id
+      const dateKey = todayKey();
+      created.forEach((t) =>
+        enqueue({ type: "insert", task: t, dateKey, clientId: `ins-${t.id}` })
+      );
+      // 抑制 Realtime 回写，避免与本地的 id 替换互相覆盖
+      suppressRemoteRef.current = true;
+
+      let synced = 0;
+      let done = 0;
+      for (const task of created) {
+        try {
+          const saved = await supabaseTaskRepo.insertTask(task, dateKey);
+          if (saved) {
+            dequeue(`ins-${task.id}`);
+            synced += 1;
+            setTasks((prev) => {
+              const next = prev
+                .map((t) => (t.id === task.id ? saved : t))
+                .sort(byScheduledTime);
+              saveSnapshot(next);
+              return next;
+            });
+          }
+        } catch (err) {
+          console.warn("[FlowMirror] 批量导入中断（保留离线队列待补录）：", err);
+        } finally {
+          done += 1;
+          onProgress?.(done, created.length);
+        }
+      }
+
+      setTimeout(() => {
+        suppressRemoteRef.current = false;
+      }, 600);
+
+      // 3) 未成功的条目仍在离线队列里，网络恢复后由 flushQueue 自动补录
+      if (synced < created.length) {
+        pushToast(`${created.length - synced} 项未同步到云端，已排队待补录`, "warn");
+      }
+      return created.length;
+    },
+    [pushToast]
+  );
+
   const unfreeze = useCallback(() => {
     setCareMode(false);
     setTasks((prev) => {
@@ -668,6 +762,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     submitReview,
     executeCommand,
     addTask,
+    addTasks,
     unfreeze,
     openDetail,
     closeDetail,

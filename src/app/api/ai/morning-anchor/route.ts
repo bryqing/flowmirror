@@ -99,7 +99,8 @@ export async function POST(request: NextRequest) {
       : "昨日任务基本收尾，没有明显遗留。",
   );
   if (blackholeMinutes > 0) {
-    contextParts.push(`昨日时间黑洞合计约 ${blackholeMinutes} 分钟。`);
+    // 该数值来自「休闲娱乐」象限（含计划外失控段），措辞与新象限命名保持一致
+    contextParts.push(`昨日休闲娱乐（含失控时段）合计约 ${blackholeMinutes} 分钟。`);
   }
   if (comment) contextParts.push(`昨日黑洞警示：${comment}`);
   if (lessons.length) {

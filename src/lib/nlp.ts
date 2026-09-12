@@ -109,7 +109,7 @@ export function parseCommand(raw: string): ParsedCommand {
       intent: "blackhole",
       title,
       minutes,
-      summary: `归类为【娱乐/黑洞时间】，启动 ${minutes} 分钟倒计时，到点弹出刹车强提醒。`,
+      summary: `归类为【休闲娱乐】，启动 ${minutes} 分钟倒计时，到点弹出刹车强提醒。`,
     };
   }
 

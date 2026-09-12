@@ -9,6 +9,7 @@ import { DateStrip } from "@/components/layout/date-strip";
 import { MorningAnchor } from "./morning-anchor";
 import { TaskQuadrants } from "./task-quadrants";
 import { GlobalDispatchPanel } from "./global-dispatch-panel";
+import { QuickCaptureSheet } from "./quick-capture-sheet";
 
 export function TodayFlow() {
   const { tasks, careMode, unfreeze } = useFlow();
@@ -25,17 +26,20 @@ export function TodayFlow() {
 
   return (
     <section className="flex flex-col gap-4">
-      {/* 区块标题 */}
-      <div className="flex items-end justify-between px-1">
+      {/* 区块标题：主战场入口（AI 速记 + 战局调度） */}
+      <div className="flex flex-wrap items-end justify-between gap-2 px-1">
         <h3 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
           <Swords className="size-4 text-cat-deep" />
           今日战局
-          <span className="font-normal text-subtle-foreground">Today&apos;s Flow · 主战场</span>
+          <span className="hidden font-normal text-subtle-foreground sm:inline">
+            Today&apos;s Flow · 主战场
+          </span>
         </h3>
-        <div className="flex items-center gap-3">
-          <p className="text-[11px] text-subtle-foreground">
+        <div className="flex items-center gap-2">
+          <p className="hidden text-[11px] text-subtle-foreground md:block">
             {mounted ? `${doneCount} 完成 · ${activeCount} 待处理` : "…"}
           </p>
+          <QuickCaptureSheet />
           <GlobalDispatchPanel />
         </div>
       </div>
