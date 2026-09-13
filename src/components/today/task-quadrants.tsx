@@ -511,7 +511,7 @@ function TaskChip({
         </span>
       )}
 
-      {/* 编辑入口。移动端不渲染：那里直接点标题即可改名，多一个控件只会挤窄文字 */}
+      {/* 编辑入口。标题本身也可点，这里只是让「可编辑」这件事看得见 */}
       {!editing && !frozen && (
         <button
           onClick={(e) => {
@@ -520,7 +520,7 @@ function TaskChip({
           }}
           aria-label={`编辑任务「${task.title}」`}
           title="编辑标题"
-          className="hidden size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-deep/15 hover:text-cat-deep sm:flex"
+          className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-deep/15 hover:text-cat-deep"
         >
           <Pencil className="size-3.5" />
         </button>
