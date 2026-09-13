@@ -112,6 +112,8 @@ export const TODAY_TASKS: Task[] = [
     category: "rest",
     scheduledTime: "16:30",
     plannedDuration: 20,
+    // 待执行池的卡片会显示创建时间（其余象限不渲染该字段，故未逐条补全）
+    createdAt: "2026-09-13T09:45:00",
     timeSlices: [],
     microReviews: [],
     insights: [],
@@ -138,6 +140,7 @@ export const TODAY_TASKS: Task[] = [
     category: "rest",
     scheduledTime: "21:30",
     plannedDuration: 30,
+    createdAt: "2026-09-13T21:10:00",
     timeSlices: [],
     microReviews: [],
     insights: [],

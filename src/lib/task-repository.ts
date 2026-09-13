@@ -35,6 +35,8 @@ function rowToTask(row: Record<string, unknown>): Task {
     insights: (row.insights as string[]) ?? [],
     sops: (row.sops as string[]) ?? [],
     pitfalls: (row.pitfalls as string[]) ?? [],
+    // 只读映射：created_at 由数据库生成，写入时不回传（见 taskToRow）
+    createdAt: (row.created_at as string) ?? undefined,
   };
 }
 
@@ -143,6 +145,36 @@ export async function fetchTasksOrNull(dateKey: string): Promise<Task[] | null> 
 /** 是否走远程（登录 + 配置齐全） */
 export function isRemoteMode(): boolean {
   return isSupabaseConfigured();
+}
+
+/**
+ * 拉取「待执行清单」（category=rest）的**全局池**：不带 `date` 条件。
+ *
+ * 这是 Q3 从「按日切片」改成「常驻池」在数据层的落点：它一旦绑定 selectedDate，
+ * 翻到任意历史日期池子就会变空 —— 那正是本次要修掉的症状。
+ *
+ * 返回 `null` 表示**拉取失败**（网络/权限/未配置），与「拉到了空数组」严格区分：
+ * 调用方对二者的处理完全不同（失败保持本地，空则如实呈现）。
+ */
+export async function fetchBacklogOrNull(): Promise<Task[] | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from("tasks")
+      .select("*")
+      .eq("category", "rest")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.warn("[FlowMirror] 拉取待执行池失败（保持本地状态）：", error.message);
+      return null;
+    }
+    return (data ?? []).map(rowToTask);
+  } catch (err) {
+    console.warn("[FlowMirror] 拉取待执行池异常（保持本地状态）：", err);
+    return null;
+  }
 }
 
 export function todayKey(): string {

@@ -2,8 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  Archive,
   Check,
+  ChevronDown,
   ChevronRight,
+  Clock,
   Loader2,
   Pencil,
   Play,
@@ -22,12 +25,21 @@ import {
   type Task,
   type TaskCategory,
 } from "@/lib/types";
-import { isTiming, openSliceStart, recordedMinutes, windowLabel } from "@/lib/task-time";
+import {
+  formatStamp,
+  isTiming,
+  openSliceStart,
+  recordedMinutes,
+  windowLabel,
+} from "@/lib/task-time";
 import { cn, fmtDuration } from "@/lib/utils";
 
 /**
- * 四象限看板顺序与文案统一由 QUADRANT_META 提供（q1 紧急重要 → q4 休闲娱乐），
- * 这里不再本地维护名称，避免出现第二份文案源。
+ * 四象限看板：
+ *   · q1/q2/q4 按 selectedDate 切片 —— 「每日战局」；
+ *   · q3「待执行清单」是**全局常驻池**（backlogTasks），不随日期切换而变化。
+ * 顺序与文案统一由 QUADRANT_META 提供（q1 紧急重要 → q4 休闲娱乐），
+ * 这里不本地维护任何象限名称，避免出现第二份文案源。
  */
 
 /** 圆环进度圈配色（与分类令牌一致） */
@@ -41,6 +53,7 @@ const RING_COLORS: Record<TaskCategory, string> = {
 export function TaskQuadrants() {
   const {
     tasks,
+    backlogTasks,
     openDetail,
     completeTask,
     addTask,
@@ -62,6 +75,9 @@ export function TaskQuadrants() {
   // 正在就地录入的象限。全局只允许一个，避免多个输入框同时抢焦点。
   const [addingIn, setAddingIn] = useState<TaskCategory | null>(null);
 
+  // 待执行池里「已完成」是否展开（默认收起，见下方渲染处的说明）
+  const [showArchived, setShowArchived] = useState(false);
+
   const handleAdd = async (title: string, category: TaskCategory) => {
     try {
       await addTask(title, category);
@@ -78,16 +94,47 @@ export function TaskQuadrants() {
       {QUADRANT_ORDER.map((q, qi) => {
         const { category, hint } = QUADRANT_META[q];
         const meta = CATEGORY_META[category];
-        const list = tasks.filter((t) => t.category === category);
+        /**
+         * 待执行清单（q3 / rest）的数据源是**全局常驻池**而非当日切片：
+         * 无论日期栏切到哪一天，它始终展示全量待执行事项，不随之清空或重置。
+         */
+        const isBacklog = category === "rest";
+        const pool = isBacklog ? backlogTasks : tasks.filter((t) => t.category === category);
+        /**
+         * 池子把「已完成」折到下方：它是常驻的，已办事项会一直累积，
+         * 全部平铺会把真正待办的东西淹掉；但也不能直接隐藏 ——
+         * 打钩手滑之后总得能把那条找回来。
+         */
+        const list = isBacklog ? pool.filter((t) => t.status !== "done") : pool;
+        const doneList = pool.filter((t) => t.status === "done");
         const total = list.reduce((sum, t) => sum + (t.plannedDuration ?? 0), 0);
-        const doneCount = list.filter((t) => t.status === "done").length;
-        const progress = list.length > 0 ? doneCount / list.length : 0;
+        const progress = pool.length > 0 ? doneList.length / pool.length : 0;
         const active = list.some((t) => t.status === "in-progress");
         const adding = addingIn === category;
+
+        /** 卡片工厂：待办区与已完成区复用同一套回调，避免两处 props 走形 */
+        const renderChip = (task: Task) => (
+          <TaskChip
+            key={task.id}
+            task={task}
+            subtitle={isBacklog ? formatStamp(task.createdAt) : undefined}
+            onOpen={() => openDetail(task.id)}
+            onComplete={() => completeTask(task.id)}
+            onSetTime={(start, duration) => setTaskTime(task.id, start, duration)}
+            onToggleTiming={() => toggleTiming(task.id)}
+            onRename={(title) => renameTask(task.id, title)}
+            onDelete={() => {
+              deleteTask(task.id);
+              pushToast(`已删除「${task.title}」`, "info");
+            }}
+          />
+        );
 
         return (
           <section
             key={category}
+            data-quadrant={q}
+            data-pool={isBacklog ? "backlog" : "day"}
             className={cn(
               // ⚠️ `min-w-0` 不能删：grid 子项的 `min-width` 默认是 `auto`，
               // 列宽会被子项的 min-content 顶开。卡片行里有一串 shrink-0 的控件
@@ -108,7 +155,20 @@ export function TaskQuadrants() {
                 <span className="font-mono text-[10px] font-normal opacity-60">{q.toUpperCase()}</span>
                 {meta.label}
               </p>
-              <span className="rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10px] text-zinc-400">
+              {isBacklog && (
+                <span
+                  data-pool-badge
+                  title="全局常驻池：不随日期栏切换，全量保留待执行事项"
+                  className="shrink-0 rounded-full border border-cat-rest/30 bg-cat-rest/10 px-1.5 py-px text-[9px] font-normal text-cat-rest"
+                >
+                  全局池
+                </span>
+              )}
+              <span
+                data-pool-count
+                className="rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10px] text-zinc-400"
+                title={isBacklog ? `未完成 ${list.length} · 已完成 ${doneList.length}` : undefined}
+              >
                 {mounted ? list.length : 0}
               </span>
               <span className="ml-auto font-mono text-[10px] text-zinc-400">
@@ -133,8 +193,8 @@ export function TaskQuadrants() {
               <RingProgress
                 value={mounted ? progress : 0}
                 color={RING_COLORS[category]}
-                done={mounted ? doneCount : 0}
-                total={mounted ? list.length : 0}
+                done={mounted ? doneList.length : 0}
+                total={mounted ? pool.length : 0}
               />
             </header>
 
@@ -146,27 +206,35 @@ export function TaskQuadrants() {
                 </p>
               )}
               {mounted && list.length === 0 && (
-                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] py-6 text-[11px] text-zinc-500">
-                  暂无安排
+                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] px-3 py-6 text-center text-[11px] text-zinc-500">
+                  {isBacklog ? "池子还空着 · 把「以后再说」的事丢进来" : "暂无安排"}
                 </p>
               )}
-              {mounted &&
-                list.map((task) => (
-                  <TaskChip
-                    key={task.id}
-                    task={task}
-                    onOpen={() => openDetail(task.id)}
-                    onComplete={() => completeTask(task.id)}
-                    onSetTime={(start, duration) => setTaskTime(task.id, start, duration)}
-                    onToggleTiming={() => toggleTiming(task.id)}
-                    onRename={(title) => renameTask(task.id, title)}
-                    onDelete={() => {
-                      deleteTask(task.id);
-                      pushToast(`已删除「${task.title}」`, "info");
-                    }}
-                  />
-                ))}
+              {mounted && list.map(renderChip)}
 
+              {/* 已完成区：折叠收纳（见上方 doneList 的说明），展开后仍可编辑/删除 */}
+              {mounted && isBacklog && doneList.length > 0 && (
+                <div className="flex flex-col gap-2.5">
+                  <button
+                    data-backlog-archive-toggle
+                    onClick={() => setShowArchived((v) => !v)}
+                    aria-expanded={showArchived}
+                    aria-label={`已完成 ${doneList.length} 项`}
+                    className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-subtle-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
+                  >
+                    <Archive className="size-3 shrink-0" />
+                    已完成 {doneList.length} 项
+                    <ChevronDown
+                      className={cn("size-3 shrink-0 transition-transform", showArchived && "rotate-180")}
+                    />
+                  </button>
+                  {showArchived && (
+                    <div data-backlog-archive className="flex flex-col gap-2.5 opacity-65">
+                      {doneList.map(renderChip)}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* 就地新增：仅当前展开的象限渲染，回车即存并可连续录入 */}
               {adding && (
                 <AddTaskRow
@@ -331,9 +399,14 @@ function RingProgress({
  *   回车 / 失焦保存，ESC 放弃，空值与未改动都当放弃处理。
  *   ⚠️ 编辑态下卡片本体的 click 与 Enter 必须让路 —— 卡片整体是「打开详情」的
  *   热区，不拦的话点一下标题会同时弹出抽屉，输入框还没开始写就被盖住。
+ *
+ * `subtitle`：可选的副标题行（待执行池用来显示「什么时候记下来的」）。
+ *   之所以做成整行而不是塞进主行 —— 主行已有 6 个控件，再往里挤文字会把标题压到
+ *   只剩两三个字；独占一行的副标题在 390px 下也不破坏布局。
  */
 function TaskChip({
   task,
+  subtitle,
   onOpen,
   onComplete,
   onSetTime,
@@ -342,6 +415,7 @@ function TaskChip({
   onDelete,
 }: {
   task: Task;
+  subtitle?: string | null;
   onOpen: () => void;
   onComplete: () => void;
   onSetTime: (startClock: string | undefined, durationMin: number | undefined) => void;
@@ -433,7 +507,8 @@ function TaskChip({
         onOpen();
       }}
       className={cn(
-        "group -mx-2 flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-2.5 transition-colors duration-200",
+        // 外层竖排：主行 + 可选副标题行。副标题缺席时与原来的「单行 flex」等价。
+        "group -mx-2 flex cursor-pointer flex-col rounded-lg border border-transparent px-2 py-2.5 transition-colors duration-200",
         "hover:bg-white/[0.04]",
         frozen && "opacity-45 saturate-50",
         done && "opacity-60",
@@ -441,6 +516,7 @@ function TaskChip({
         running && !isBlackhole && "bg-cat-deep/[0.07] hover:bg-cat-deep/[0.11]"
       )}
     >
+      <div className="flex items-center gap-2">
       {/* 快速打钩（不打开抽屉） */}
       <button
         onClick={(e) => {
@@ -596,6 +672,19 @@ function TaskChip({
       </button>
 
       <ChevronRight className="size-3.5 shrink-0 text-subtle-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      </div>
+
+      {/* 副标题：待执行池用来显示这条是什么时候记下来的，方便追溯录入时间 */}
+      {subtitle && (
+        <p
+          data-task-created
+          title={`录入于 ${subtitle}`}
+          className="mt-1 flex items-center gap-1 pl-6 text-[10px] text-subtle-foreground"
+        >
+          <Clock className="size-2.5 shrink-0 opacity-70" />
+          <span className="font-mono tabular-nums">{subtitle}</span>
+        </p>
+      )}
     </div>
   );
 }

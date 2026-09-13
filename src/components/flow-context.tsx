@@ -33,11 +33,14 @@ import {
   isRemoteMode,
   supabaseTaskRepo,
   fetchTasksOrNull,
+  fetchBacklogOrNull,
   todayKey,
 } from "@/lib/task-repository";
 import {
   loadSnapshot,
   saveSnapshot,
+  loadBacklogSnapshot,
+  saveBacklogSnapshot,
   loadQueue,
   enqueue,
   dequeue,
@@ -51,7 +54,22 @@ export interface Toast {
 }
 
 interface FlowContextValue {
+  /**
+   * **当日看板**：当前 `selectedDate` 那天的 Q1/Q2/Q4 任务。
+   *
+   * ⚠️ 不含「待执行清单」（q3 / category=rest）—— 那个象限是常驻全局池，
+   * 见 `backlogTasks`。两个池按 `category` 互斥，同一个任务绝不会同时出现在两处。
+   */
   tasks: Task[];
+  /**
+   * **待执行清单全局池**（Q3）：全量 rest 任务，**不受 selectedDate 约束**。
+   *
+   * 无论日期栏切到哪一天，这里始终是同一份集合；增删改直接写它自己的快照，
+   * 与按日快照互不干扰。
+   */
+  backlogTasks: Task[];
+  /** 跨池查任务（日看板 + 全局池）。编辑/计时/详情等按 id 定位时一律走它 */
+  findTask: (id: string) => Task | undefined;
   careMode: boolean;
   candleMode: boolean;
   reviewTaskId: string | null;
@@ -140,6 +158,16 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   // 关键：初始状态必须与 SSR 完全一致（一律 TODAY_TASKS）。
   // 本地快照的读取放在挂载后的 useEffect 中异步触发，避免 SSR 与客户端首帧水合差异。
   const [tasks, setTasks] = useState<Task[]>(TODAY_TASKS);
+  /**
+   * 「待执行清单」全局池（Q3）。
+   *
+   * 初值与 SSR 同源（演示数据里的 rest 条目，纯静态计算 → 首帧一致）；
+   * 挂载后再由本地快照 / 云端全量集合接管。它与 `tasks` 是**并列的两个池**：
+   * `tasks` 按 selectedDate 切片，这里永远全量。
+   */
+  const [backlogTasks, setBacklogTasks] = useState<Task[]>(() =>
+    TODAY_TASKS.filter((t) => t.category === "rest")
+  );
   const [careMode, setCareMode] = useState(false);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
@@ -170,12 +198,39 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   /** 今天的日期 key，供长生命周期回调使用 */
   const todayRef = useRef<string>(today);
 
-  /** 某日无远程数据时的本地兜底：今日给演示数据，其余日期一律留空 */
+  /**
+   * 某日无远程数据时的本地兜底：今日给演示数据，其余日期一律留空。
+   *
+   * ⚠️ 只返回**日池**任务（Q1/Q2/Q4）。「待执行清单」不在按日快照的语义里，
+   * 若让它混进来，切到任意一天都会看到同一批 Q3 条目被当成「那天的任务」
+   * 参与完成率、热力大盘等按日统计 —— 池子必须是另一个维度。
+   */
   const localTasksFor = useCallback((dateKey: string): Task[] => {
     const snap = loadSnapshot(dateKey);
-    if (snap) return snap;
-    return dateKey === todayRef.current ? TODAY_TASKS : [];
+    const source = snap ?? (dateKey === todayRef.current ? TODAY_TASKS : []);
+    return source.filter(isDayPoolTask);
   }, []);
+
+  /**
+   * 「待执行清单」全局池的本地兜底，按优先级：
+   *   1) 池子自己的快照（空数组也是有效值，代表「用户把池子清空了」）；
+   *   2) **迁移**：旧版本的 Q3 存在「今日快照」里，把它接过来，
+   *      否则升级后用户会发现待执行清单凭空消失了；
+   *   3) 演示数据里的 rest 条目（全新安装、纯本地演示）。
+   */
+  const localBacklog = useCallback((): Task[] => {
+    const snap = loadBacklogSnapshot();
+    if (snap) return snap;
+    const day = loadSnapshot(todayRef.current) ?? TODAY_TASKS;
+    return day.filter((t) => t.category === "rest");
+  }, []);
+
+  /** 跨池查任务：日看板 + 全局池。按 id 定位的读路径（详情/复盘/编辑）一律用它 */
+  const findTask = useCallback(
+    (id: string): Task | undefined =>
+      tasks.find((t) => t.id === id) ?? backlogTasks.find((t) => t.id === id),
+    [tasks, backlogTasks]
+  );
 
   const isViewingToday = selectedDate === today;
 
@@ -219,6 +274,16 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     setToday(t);
   }, []);
 
+  // ---- 装载「待执行清单」全局池：只跑一次（本地快照 / 迁移 / 演示数据）----
+  //
+  // 刻意**不依赖 selectedDate**：换日期不该让这个池重新装载，
+  // 那正是「原来切一天池子就空掉」的成因。云端数据由会话建立时拉取（见下方 effect）。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setBacklogTasks(localBacklog());
+  }, [localBacklog]);
+
   // ---- 加载昨日任务（昨日之镜的真实指标数据源）----
   //
   // 与「当前查看日期」的装载刻意分开：昨日之镜永远看的是今天的前一天，
@@ -255,12 +320,15 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     void (async () => {
       const remote = await fetchTasksOrNull(selectedDate);
       if (cancelled || remote === null) return;
+      // 只收日池：待执行清单由全局池单独维护，按日拉取时把它剔掉，
+      // 否则同一条 Q3 会同时出现在两个池里（改一处、另一处还是旧的）。
+      const dayTasks = remote.filter(isDayPoolTask);
       // 今日云端为空时保留本地数据（首次登录可把本地任务推上去）；
       // 历史日期为空就应当是空的 —— 空列表本身是有效结果，要如实呈现。
-      if (remote.length === 0 && selectedDate === todayRef.current) return;
+      if (dayTasks.length === 0 && selectedDate === todayRef.current) return;
       tasksDateRef.current = selectedDate;
-      setTasks(remote);
-      saveSnapshot(remote, selectedDate);
+      setTasks(dayTasks);
+      saveSnapshot(dayTasks, selectedDate);
     })();
     return () => {
       cancelled = true;
@@ -274,6 +342,101 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     let channel: ReturnType<ReturnType<typeof getSupabase>["channel"]> | null = null;
     let cancelled = false;
     const supabase = getSupabase();
+
+    /**
+     * 把一条 Realtime 变更落到**正确的池**里。
+     *
+     * 判断顺序是关键：**先看它是不是待执行清单**。那个池是全局的、不受
+     * 「当前查看哪一天」约束，必须无条件吸收 —— 否则手机上把 Q3 打了钩，
+     * 平板上还挂着旧状态（甚至因为日期对不上而永远收不到）。
+     * 其余分类才回到「只吸收当前查看日期」的老规矩。
+     */
+    const applyRemoteRow = (
+      eventType: "INSERT" | "UPDATE" | "DELETE",
+      row: Record<string, unknown>,
+      old: Record<string, unknown> | null
+    ) => {
+      // payload.old 默认只带主键（表未开 REPLICA IDENTITY FULL），所以删除时
+      // 无法得知它原本属于哪个池 —— 两个池都按 id 清一次：id 全局唯一，幂等且不误伤。
+      if (eventType === "DELETE") {
+        const id = String(row.id ?? old?.id ?? "");
+        if (!id) return;
+        setTasks((prev) => {
+          const next = prev.filter((t) => t.id !== id);
+          saveSnapshot(next, selectedDateRef.current);
+          return next;
+        });
+        setBacklogTasks((prev) => {
+          const next = prev.filter((t) => t.id !== id);
+          saveBacklogSnapshot(next);
+          return next;
+        });
+        return;
+      }
+
+      const updated = rowToTaskLocal(row);
+
+      // —— 落进全局池 ——
+      if (updated.category === "rest") {
+        setBacklogTasks((prev) => {
+          const next = prev.some((t) => t.id === updated.id)
+            ? prev.map((t) => (t.id === updated.id ? updated : t))
+            : [updated, ...prev];
+          next.sort(byCreatedAtDesc);
+          saveBacklogSnapshot(next);
+          return next;
+        });
+        // 它可能刚从日池挪进来（AI 复核改了象限），顺手摘掉日池里那份
+        setTasks((prev) => {
+          if (!prev.some((t) => t.id === updated.id)) return prev;
+          const next = prev.filter((t) => t.id !== updated.id);
+          saveSnapshot(next, selectedDateRef.current);
+          return next;
+        });
+        return;
+      }
+
+      // —— 非 rest ——
+      // 若它原本在池里（象限变更后离开），也要把池子那份清掉，避免留下幽灵条目
+      setBacklogTasks((prev) => {
+        if (!prev.some((t) => t.id === updated.id)) return prev;
+        const next = prev.filter((t) => t.id !== updated.id);
+        saveBacklogSnapshot(next);
+        return next;
+      });
+
+      const rowDate =
+        typeof row.date === "string" ? row.date : (old?.date as string | undefined);
+      if (rowDate && rowDate !== selectedDateRef.current) return;
+      setTasks((prev) => {
+        const next = prev.some((t) => t.id === updated.id)
+          ? prev.map((t) => (t.id === updated.id ? updated : t)).sort(byScheduledTime)
+          : [...prev, updated].sort(byScheduledTime);
+        saveSnapshot(next, selectedDateRef.current);
+        return next;
+      });
+    };
+
+    /**
+     * 采纳云端返回的「待执行清单」全局池。
+     *
+     * 与日看板刻意采用**不同**的空值策略：
+     *   · 非空 → 无条件采纳（云端是权威）。
+     *   · 空   → 仅当离线队列里没有「还没推上去的条目」时才采纳。
+     *
+     * 日看板那种「空就一律保留本地」是为了不把首次登录的本地任务推掉，
+     * 但那会让「在手机上清空了池子」永远同步不过来。
+     * 这里用「离线队列是否为空」做判据，两种意图都能满足：
+     * 刚在断网时记下的条目不会被一次空响应抹掉，而真正清空则如实生效。
+     */
+    const adoptBacklog = (remote: Task[]) => {
+      if (remote.length === 0 && loadQueue().length > 0) return;
+      setBacklogTasks((prev) => {
+        if (sameTaskList(prev, remote)) return prev;
+        saveBacklogSnapshot(remote);
+        return remote;
+      });
+    };
 
     /** 订阅 tasks 表 Realtime（多端实时同步），重复调用前先断开旧订阅 */
     const subscribeTasks = (userId: string) => {
@@ -292,32 +455,11 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           { event: "*", schema: "public", table: "tasks", filter: `user_id=eq.${userId}` },
           (payload) => {
             if (suppressRemoteRef.current) return;
-            const row = payload.new as Record<string, unknown>;
-            // 只吸收「当前查看日期」的变更：看板可能停在历史日期上，
-            // 若把其他日期的行也塞进来，历史视图里会凭空多出今天的任务。
-            const rowDate =
-              typeof row.date === "string"
-                ? row.date
-                : (payload.old as { date?: string } | null)?.date;
-            if (rowDate && rowDate !== selectedDateRef.current) return;
-            setTasks((prev) => {
-              const next = (() => {
-                switch (payload.eventType) {
-                  case "INSERT":
-                    return [...prev, rowToTaskLocal(row)].sort(byScheduledTime);
-                  case "UPDATE": {
-                    const updated = rowToTaskLocal(row);
-                    return prev.map((t) => (t.id === updated.id ? updated : t));
-                  }
-                  case "DELETE":
-                    return prev.filter((t) => t.id !== (payload.old as { id?: string })?.id);
-                  default:
-                    return prev;
-                }
-              })();
-              saveSnapshot(next, selectedDateRef.current);
-              return next;
-            });
+            applyRemoteRow(
+              payload.eventType as "INSERT" | "UPDATE" | "DELETE",
+              payload.new as Record<string, unknown>,
+              (payload.old as Record<string, unknown> | null) ?? null
+            );
           }
         )
         .subscribe();
@@ -344,15 +486,24 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       pollInFlight = true;
       try {
         const dateKey = selectedDateRef.current;
-        const remote = await fetchTasksOrNull(dateKey);
-        if (cancelled || !remote) return;
-        // 今日云端为空 → 保留本地（可能是还没推上去的离线任务）
-        if (remote.length === 0 && dateKey === todayRef.current) return;
-        setTasks((prev) => {
-          if (sameTaskList(prev, remote)) return prev; // 无变化则不触发重渲染
-          saveSnapshot(remote, dateKey);
-          return remote;
-        });
+        // 两个池并行拉：日看板带 date 过滤，待执行池不带（全量集合）
+        const [remote, backlogRemote] = await Promise.all([
+          fetchTasksOrNull(dateKey),
+          fetchBacklogOrNull(),
+        ]);
+        if (cancelled) return;
+        if (remote) {
+          const dayTasks = remote.filter(isDayPoolTask);
+          // 今日云端为空 → 保留本地（可能是还没推上去的离线任务）
+          if (!(dayTasks.length === 0 && dateKey === todayRef.current)) {
+            setTasks((prev) => {
+              if (sameTaskList(prev, dayTasks)) return prev; // 无变化则不触发重渲染
+              saveSnapshot(dayTasks, dateKey);
+              return dayTasks;
+            });
+          }
+        }
+        if (backlogRemote) adoptBacklog(backlogRemote);
       } catch (err) {
         console.warn("[FlowMirror] 轮询同步失败（保持本地状态）：", err);
       } finally {
@@ -378,14 +529,20 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       setUserEmail(email);
       // 拉取「当前正在查看的那天」，而不是死板地拉今天
       const dateKey = selectedDateRef.current;
-      const remote = await supabaseTaskRepo.fetchTasks(dateKey);
+      // 两个池并行拉：日看板按日过滤，待执行清单是全量集合
+      const [remote, backlogRemote] = await Promise.all([
+        supabaseTaskRepo.fetchTasks(dateKey),
+        fetchBacklogOrNull(),
+      ]);
       if (cancelled) return;
+      const dayTasks = remote.filter(isDayPoolTask);
       // 云端有数据则覆盖本地；为空则保留当前本地数据（首次登录可把本地任务推上去）
-      if (remote.length > 0) {
+      if (dayTasks.length > 0) {
         tasksDateRef.current = dateKey;
-        setTasks(remote);
-        saveSnapshot(remote, dateKey);
+        setTasks(dayTasks);
+        saveSnapshot(dayTasks, dateKey);
       }
+      if (backlogRemote) adoptBacklog(backlogRemote);
       setSynced(true);
       subscribeTasks(userId);
       startPolling();
@@ -404,6 +561,8 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       const dateKey = selectedDateRef.current;
       tasksDateRef.current = dateKey;
       setTasks(localTasksFor(dateKey));
+      // 全局池回到它自己的本地快照（与日期无关，所以不随 dateKey 变）
+      setBacklogTasks(localBacklog());
     };
 
     (async () => {
@@ -454,14 +613,20 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         }
         if (ok) dequeue(op.clientId);
       }
-      // 补录完成后刷新一次远程，确保状态一致（刷新当前查看的那天）
+      // 补录完成后刷新一次远程，确保状态一致（刷新当前查看的那天 + 全局池）
       const dateKey = selectedDateRef.current;
-      const refreshed = await supabaseTaskRepo.fetchTasks(dateKey);
-      if (!cancelled && refreshed.length > 0) {
+      const [refreshed, backlogRefreshed] = await Promise.all([
+        supabaseTaskRepo.fetchTasks(dateKey),
+        fetchBacklogOrNull(),
+      ]);
+      if (cancelled) return;
+      const dayTasks = refreshed.filter(isDayPoolTask);
+      if (dayTasks.length > 0) {
         tasksDateRef.current = dateKey;
-        setTasks(refreshed);
-        saveSnapshot(refreshed, dateKey);
+        setTasks(dayTasks);
+        saveSnapshot(dayTasks, dateKey);
       }
+      if (backlogRefreshed) adoptBacklog(backlogRefreshed);
     };
 
     if (typeof window !== "undefined") {
@@ -486,46 +651,50 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         document.removeEventListener("visibilitychange", handleVisibility);
       }
     };
-  }, [pushToast, localTasksFor]);
-
-  const completeTask = useCallback((id: string) => {
-    setTasks((prev) => {
-      const next = prev.map((t) =>
-        t.id === id && t.status !== "done"
-          ? { ...t, status: "done" as const, actualDuration: t.actualDuration ?? t.plannedDuration }
-          : t
-      );
-      // 本地快照兜底
-      saveSnapshot(next, tasksDateRef.current);
-      // 远程同步写库（失败入队，网络恢复补录）
-      const updated = next.find((t) => t.id === id);
-      if (updated && isRemoteMode()) {
-        const op: PendingOp = { type: "update", task: updated, clientId: `upd-${id}` };
-        enqueue(op);
-        supabaseTaskRepo.updateTask(updated).then((ok) => {
-          if (ok) dequeue(op.clientId);
-        });
-      }
-      return next;
-    });
-    setReviewTaskId(id);
-  }, []);
-
-  const closeReview = useCallback(() => setReviewTaskId(null), []);
+  }, [pushToast, localTasksFor, localBacklog]);
 
   /**
    * 统一的「改单个任务」出口：本地即时改写 + 快照落盘 + 云端同步（失败入离线队列）。
    *
-   * 时间轴相关的三个写操作（标记时间段 / 开始计时 / 结束计时）都走这里。
-   * 各自写一遍三件套极易漏环 —— 漏快照则刷新回滚，漏入队则断网丢改动，
-   * 而这两个 bug 都只在「刷新」或「断网」时才暴露，平时完全看不出来。
+   * 时间轴相关的三个写操作（标记时间段 / 开始计时 / 结束计时）、就地改名、
+   * 打钩完成、微复盘沉淀都走这里。各自写一遍三件套极易漏环 —— 漏快照则刷新回滚，
+   * 漏入队则断网丢改动，而这两个 bug 都只在「刷新」或「断网」时才暴露，平时完全看不出来。
+   *
+   * 🔑 **按分类路由到正确的池**：`rest` 落在全局池（不按日期分片），其余落在当日看板。
+   * 两个池按 category 互斥，所以这里同时负责「摘掉另一个池里的同名条目」——
+   * 象限变了就是一次搬家（如 AI 复核把刚记的 q3 改成 q1），
+   * 不摘的话旧池会留下一个点不动的幽灵条目。
    */
   const commitTask = useCallback((updated: Task) => {
-    setTasks((prev) => {
-      const next = prev.map((t) => (t.id === updated.id ? updated : t)).sort(byScheduledTime);
-      saveSnapshot(next, tasksDateRef.current);
-      return next;
-    });
+    if (updated.category === "rest") {
+      setTasks((prev) => {
+        if (!prev.some((t) => t.id === updated.id)) return prev;
+        const next = prev.filter((t) => t.id !== updated.id);
+        saveSnapshot(next, tasksDateRef.current);
+        return next;
+      });
+      setBacklogTasks((prev) => {
+        const next = (
+          prev.some((t) => t.id === updated.id)
+            ? prev.map((t) => (t.id === updated.id ? updated : t))
+            : [updated, ...prev]
+        ).sort(byCreatedAtDesc);
+        saveBacklogSnapshot(next);
+        return next;
+      });
+    } else {
+      setBacklogTasks((prev) => {
+        if (!prev.some((t) => t.id === updated.id)) return prev;
+        const next = prev.filter((t) => t.id !== updated.id);
+        saveBacklogSnapshot(next);
+        return next;
+      });
+      setTasks((prev) => {
+        const next = prev.map((t) => (t.id === updated.id ? updated : t)).sort(byScheduledTime);
+        saveSnapshot(next, tasksDateRef.current);
+        return next;
+      });
+    }
     if (isRemoteMode() && SERVER_ID.test(updated.id)) {
       const op: PendingOp = { type: "update", task: updated, clientId: `upd-${updated.id}` };
       enqueue(op);
@@ -534,6 +703,67 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       });
     }
   }, []);
+
+  /** 新增：按分类落进对应的池，并写该池的快照 */
+  const insertTask = useCallback((task: Task) => {
+    if (task.category === "rest") {
+      setBacklogTasks((prev) => {
+        const next = [task, ...prev].sort(byCreatedAtDesc);
+        saveBacklogSnapshot(next);
+        return next;
+      });
+    } else {
+      setTasks((prev) => {
+        const next = [...prev, task].sort(byScheduledTime);
+        saveSnapshot(next, tasksDateRef.current);
+        return next;
+      });
+    }
+  }, []);
+
+  /**
+   * 云端插入成功 → 用服务端返回的真实行替换本地临时条目。
+   *
+   * 先从**两个池**里按「临时 id / 真实 id」各摘一次，再按返回行的分类放回该在的池：
+   * 临时行与真实行的分类理论上一致，但 AI 复核可能在中途改了象限，
+   * 用返回值而不是原对象来决定归属，才不会把一条 q1 塞进待执行池里。
+   */
+  const replaceTask = useCallback((tempId: string, saved: Task) => {
+    setTasks((prev) => {
+      const stripped = prev.filter((t) => t.id !== tempId && t.id !== saved.id);
+      const next = (
+        saved.category === "rest" ? stripped : [...stripped, saved]
+      ).sort(byScheduledTime);
+      saveSnapshot(next, tasksDateRef.current);
+      return next;
+    });
+    setBacklogTasks((prev) => {
+      const stripped = prev.filter((t) => t.id !== tempId && t.id !== saved.id);
+      const next = (
+        saved.category === "rest" ? [saved, ...stripped] : stripped
+      ).sort(byCreatedAtDesc);
+      saveBacklogSnapshot(next);
+      return next;
+    });
+  }, []);
+
+  const completeTask = useCallback(
+    (id: string) => {
+      const target = findTask(id);
+      if (target && target.status !== "done") {
+        commitTask({
+          ...target,
+          status: "done" as const,
+          actualDuration: target.actualDuration ?? target.plannedDuration,
+        });
+      }
+      // 无论写入与否都唤起微复盘：打钩本身就是「这件事完成了」的信号
+      setReviewTaskId(id);
+    },
+    [findTask, commitTask]
+  );
+
+  const closeReview = useCallback(() => setReviewTaskId(null), []);
 
   /**
    * 就地改任务标题。
@@ -549,12 +779,12 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     (id: string, title: string) => {
       const next = title.trim();
       if (!next) return;
-      const target = tasks.find((t) => t.id === id);
+      const target = findTask(id);
       if (!target || target.title === next) return;
       if (target.status === "frozen") return;
       commitTask({ ...target, title: next });
     },
-    [tasks, commitTask]
+    [findTask, commitTask]
   );
 
   /**
@@ -566,7 +796,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
    */
   const setTaskTime = useCallback(
     (id: string, startClock: string | undefined, durationMin: number | undefined) => {
-      const target = tasks.find((t) => t.id === id);
+      const target = findTask(id);
       if (!target) return;
       if (isTiming(target)) {
         pushToast("该任务正在计时，先结束计时再调整时间段", "warn");
@@ -587,13 +817,13 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         startClock ? "success" : "info"
       );
     },
-    [tasks, commitTask, pushToast]
+    [findTask, commitTask, pushToast]
   );
 
   /** 开始计时：追加一个未闭合切片，任务转为进行中 */
   const startTiming = useCallback(
     (id: string) => {
-      const target = tasks.find((t) => t.id === id);
+      const target = findTask(id);
       if (!target) return;
       if (target.status === "done") {
         pushToast("该任务已完成，无需计时", "warn");
@@ -611,13 +841,13 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       });
       pushToast(`开始计时 · ${target.title}`, "info");
     },
-    [tasks, commitTask, pushToast]
+    [findTask, commitTask, pushToast]
   );
 
   /** 结束计时：闭合切片、累计实际时长，任务回到待办（还没做完，只是这段记完了） */
   const stopTiming = useCallback(
     (id: string) => {
-      const target = tasks.find((t) => t.id === id);
+      const target = findTask(id);
       if (!target) return;
       const index = target.timeSlices.findIndex((s) => Boolean(s.start) && !s.end);
       if (index < 0) return;
@@ -633,17 +863,17 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       });
       pushToast(`已记录 ${fmtDuration(recorded)} · ${target.title}`, "success");
     },
-    [tasks, commitTask, pushToast]
+    [findTask, commitTask, pushToast]
   );
 
   const toggleTiming = useCallback(
     (id: string) => {
-      const target = tasks.find((t) => t.id === id);
+      const target = findTask(id);
       if (!target) return;
       if (isTiming(target)) stopTiming(id);
       else startTiming(id);
     },
-    [tasks, startTiming, stopTiming]
+    [findTask, startTiming, stopTiming]
   );
 
   const submitReview = useCallback(
@@ -653,25 +883,13 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         id: uid("mr"),
         createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
       };
-      setTasks((prev) => {
-        const next = prev.map((t) =>
-          t.id === id ? { ...t, microReviews: [...t.microReviews, full] } : t
-        );
-        saveSnapshot(next, tasksDateRef.current);
-        const updated = next.find((t) => t.id === id);
-        if (updated && isRemoteMode()) {
-          const op: PendingOp = { type: "update", task: updated, clientId: `upd-${id}-${full.id}` };
-          enqueue(op);
-          supabaseTaskRepo.updateTask(updated).then((ok) => {
-            if (ok) dequeue(op.clientId);
-          });
-        }
-        return next;
-      });
+      // 走 commitTask：待执行池里的任务同样能挂微复盘（它也是个任务，只是没有归属日）
+      const target = findTask(id);
+      if (target) commitTask({ ...target, microReviews: [...target.microReviews, full] });
       setReviewTaskId(null);
       pushToast("微复盘已入库，经验卡片 +1", "success");
     },
-    [pushToast]
+    [findTask, commitTask, pushToast]
   );
 
   const signInWithEmail = useCallback(async (email: string) => {
@@ -743,8 +961,9 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     const dateKey = selectedDateRef.current;
     tasksDateRef.current = dateKey;
     setTasks(localTasksFor(dateKey));
+    setBacklogTasks(localBacklog());
     pushToast("已退出登录，回到本地模式", "info");
-  }, [localTasksFor, pushToast]);
+  }, [localTasksFor, localBacklog, pushToast]);
 
   /**
    * AI 象限复核 —— 只在本地方案「没底气」时调用。
@@ -754,10 +973,14 @@ export function FlowProvider({ children }: { children: ReactNode }) {
    * 可识别的信号（`confident: false`，兜底成了 q3）时，才追加一次 AI 复核 ——
    * 复用与「AI 速记」完全相同的端点与判据，结论一致就什么都不做，
    * 不一致才把任务挪到正确象限并**明确告知用户**（不静默改用户的东西）。
+   *
+   * ⚠️ 低置信度会先兜底成 q3 —— 也就是**先落进全局待执行池**。复核出 q1/q2/q4 时
+   * 这条任务要「搬回」当日看板，commitTask 会负责把池里那份摘掉；
+   * 同时还要改掉离线队列里那笔 insert，否则断网时补录回来仍是 q3。
    */
   const refineTaskQuadrant = useCallback(
     async (taskId: string, title: string, localQuadrant: Quadrant) => {
-      const local = tasks.find((t) => t.id === taskId);
+      const local = findTask(taskId);
       if (!local) return;
       try {
         const res = await fetch("/api/ai/parse-tasks", {
@@ -771,25 +994,16 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         if (!refined || refined === localQuadrant) return;
 
         const updatedTask: Task = { ...local, category: quadrantToCategory(refined) };
-        setTasks((prev) => {
-          const next = prev.map((t) => (t.id === taskId ? updatedTask : t));
-          saveSnapshot(next, tasksDateRef.current);
-          return next;
-        });
-        // 同步云端（本地临时 id 还没落库，等 flushQueue 补录时会带上新分类）
-        if (isRemoteMode() && SERVER_ID.test(updatedTask.id)) {
-          const op: PendingOp = { type: "update", task: updatedTask, clientId: `upd-${updatedTask.id}` };
-          enqueue(op);
-          supabaseTaskRepo.updateTask(updatedTask).then((ok) => {
-            if (ok) dequeue(op.clientId);
-          });
-        }
+        commitTask(updatedTask);
+        // 本地临时 id 还没落库：改写离线队列里那笔插入，补录时才带得上新象限
+        const queued = loadQueue().find((op) => op.type === "insert" && op.task.id === taskId);
+        if (queued && queued.type === "insert") enqueue({ ...queued, task: updatedTask });
         pushToast(`AI 复核后归入【${QUADRANT_META[refined].label}】`, "info");
       } catch (err) {
         console.warn("[FlowMirror] AI 象限复核失败（保留本地判定）：", err);
       }
     },
-    [pushToast, tasks]
+    [pushToast, findTask, commitTask]
   );
 
   const executeCommand = useCallback(
@@ -810,26 +1024,22 @@ export function FlowProvider({ children }: { children: ReactNode }) {
             insights: [],
             sops: ["先拆出第一步最小动作", "定时器 25 分钟，先跑一个番茄钟", "完成比完美重要"],
             pitfalls: [],
+            // 落库前先给个本地时间戳：待执行池的卡片要立刻显示「什么时候记的」
+            createdAt: new Date().toISOString(),
           };
+          // 待执行清单进全局常驻池，其余进当日看板（insertTask 内部按分类路由）。
+          // date 列仍写当前查看日：池子不靠它过滤，只作为「录入于哪一天」的存档。
           const dateKey = tasksDateRef.current;
-          setTasks((prev) => {
-            const next = [...prev, task].sort(byScheduledTime);
-            saveSnapshot(next, tasksDateRef.current);
-            return next;
-          });
+          insertTask(task);
           if (isRemoteMode()) {
             const op: PendingOp = { type: "insert", task, dateKey, clientId: `ins-${task.id}` };
             enqueue(op);
             supabaseTaskRepo.insertTask(task, dateKey).then((saved) => {
               if (saved) {
                 dequeue(op.clientId);
-                // 用服务端返回的真实 id 替换本地临时 id
+                // 用服务端返回的真实 id / created_at 替换本地临时条目
                 suppressRemoteRef.current = true;
-                setTasks((prev) => {
-                  const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
-                  saveSnapshot(next, tasksDateRef.current);
-                  return next;
-                });
+                replaceTask(task.id, saved);
                 setTimeout(() => { suppressRemoteRef.current = false; }, 500);
               }
             });
@@ -840,27 +1050,16 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "reschedule": {
-          const target = tasks.find(
-            (t) => t.title.includes(cmd.keyword) && t.status !== "done"
-          );
+          // 两个池都找：包括存在全局待执行池里的条目
+          const target =
+            tasks.find((t) => t.title.includes(cmd.keyword) && t.status !== "done") ??
+            backlogTasks.find((t) => t.title.includes(cmd.keyword) && t.status !== "done");
           if (target) {
-            const updated: Task = {
+            commitTask({
               ...target,
               scheduledTime: cmd.time ?? target.scheduledTime,
               status: "pending" as const,
-            };
-            setTasks((prev) => {
-              const next = prev.map((t) => (t.id === target.id ? updated : t));
-              saveSnapshot(next, tasksDateRef.current);
-              return next;
             });
-            if (isRemoteMode()) {
-              const op: PendingOp = { type: "update", task: updated, clientId: `upd-${target.id}` };
-              enqueue(op);
-              supabaseTaskRepo.updateTask(updated).then((ok) => {
-                if (ok) dequeue(op.clientId);
-              });
-            }
             pushToast(cmd.summary, "success");
           } else {
             pushToast(`没有找到包含「${cmd.keyword}」的任务，换个关键词试试`, "warn");
@@ -881,12 +1080,9 @@ export function FlowProvider({ children }: { children: ReactNode }) {
             insights: [],
             sops: [],
             pitfalls: [],
+            createdAt: new Date().toISOString(),
           };
-          setTasks((prev) => {
-            const next = [...prev, task].sort(byScheduledTime);
-            saveSnapshot(next, tasksDateRef.current);
-            return next;
-          });
+          insertTask(task);
           if (isRemoteMode()) {
             const bhDateKey = tasksDateRef.current;
             const op: PendingOp = { type: "insert", task, dateKey: bhDateKey, clientId: `ins-${task.id}` };
@@ -895,11 +1091,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
               if (saved) {
                 dequeue(op.clientId);
                 suppressRemoteRef.current = true;
-                setTasks((prev) => {
-                  const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
-                  saveSnapshot(next, tasksDateRef.current);
-                  return next;
-                });
+                replaceTask(task.id, saved);
                 setTimeout(() => { suppressRemoteRef.current = false; }, 500);
               }
             });
@@ -910,6 +1102,8 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "fuse": {
+          // 熔断只作用于**当日看板**：待执行清单是常驻的「以后再说」，
+          // 把它一起冻掉等于永久封住整个池子，那不是熔断的本意。
           setCareMode(true);
           setTasks((prev) => {
             const next = prev.map((t) => (t.status === "pending" ? { ...t, status: "frozen" as const } : t));
@@ -932,7 +1126,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           pushToast(cmd.summary, "info");
       }
     },
-    [pushToast, tasks, refineTaskQuadrant]
+    [pushToast, tasks, backlogTasks, refineTaskQuadrant, insertTask, replaceTask, commitTask]
   );
 
   // 直接新增任务到指定象限（灵感转待办、快速入格等场景复用），返回新任务 id
@@ -949,12 +1143,10 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         insights: [],
         sops: ["先拆出第一步最小动作", "定时器 25 分钟，先跑一个番茄钟", "完成比完美重要"],
         pitfalls: [],
+        createdAt: new Date().toISOString(),
       };
-      setTasks((prev) => {
-        const next = [...prev, task].sort(byScheduledTime);
-        saveSnapshot(next, tasksDateRef.current);
-        return next;
-      });
+      // rest → 全局待执行池，其余 → 当日看板
+      insertTask(task);
       if (isRemoteMode()) {
         const dateKey = tasksDateRef.current;
         const op: PendingOp = { type: "insert", task, dateKey, clientId: `ins-${task.id}` };
@@ -964,11 +1156,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           if (saved) {
             dequeue(op.clientId);
             suppressRemoteRef.current = true;
-            setTasks((prev) => {
-              const next = prev.map((t) => (t.id === task.id ? saved : t)).sort(byScheduledTime);
-              saveSnapshot(next, tasksDateRef.current);
-              return next;
-            });
+            replaceTask(task.id, saved);
             setTimeout(() => { suppressRemoteRef.current = false; }, 500);
             return saved.id;
           }
@@ -980,7 +1168,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       }
       return task.id;
     },
-    []
+    [insertTask, replaceTask]
   );
 
   /**
@@ -990,6 +1178,9 @@ export function FlowProvider({ children }: { children: ReactNode }) {
    * batch insert 的返回行顺序没有可靠保证，一旦与请求顺序错位，
    * 本地任务就会持有别人的服务端 id —— 之后任何更新/删除都会打错行。
    * 串行慢一点，但每一条都能拿到确定的 id。
+   *
+   * AI 拆解会把条目分到不同象限，其中可能包含 q3 → **按分类拆进两个池**：
+   * 若整批都塞进当日看板，待执行池就永远收不到这批条目（且会在下次轮询时消失）。
    */
   const addTasks = useCallback(
     async (
@@ -999,6 +1190,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       const list = items.filter((it) => it.title.trim().length > 0);
       if (list.length === 0) return 0;
 
+      const createdAt = new Date().toISOString();
       const created: Task[] = list.map((it) => ({
         id: uid("task"),
         title: it.title.trim(),
@@ -1010,14 +1202,27 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         insights: [],
         sops: ["先拆出第一步最小动作", "定时器 25 分钟，先跑一个番茄钟", "完成比完美重要"],
         pitfalls: [],
+        createdAt,
       }));
 
-      // 1) 先乐观落界面 + 本地快照 —— 点了就必须有反应，云端失败也不留空白
-      setTasks((prev) => {
-        const next = [...prev, ...created].sort(byScheduledTime);
-        saveSnapshot(next, tasksDateRef.current);
-        return next;
-      });
+      // 1) 先乐观落界面 + 本地快照 —— 点了就必须有反应，云端失败也不留空白。
+      //    按分类分组后一次性写入各自的池（避免逐条 setState）。
+      const newPool = created.filter((t) => t.category === "rest");
+      const newDay = created.filter((t) => t.category !== "rest");
+      if (newDay.length > 0) {
+        setTasks((prev) => {
+          const next = [...prev, ...newDay].sort(byScheduledTime);
+          saveSnapshot(next, tasksDateRef.current);
+          return next;
+        });
+      }
+      if (newPool.length > 0) {
+        setBacklogTasks((prev) => {
+          const next = [...newPool, ...prev].sort(byCreatedAtDesc);
+          saveBacklogSnapshot(next);
+          return next;
+        });
+      }
 
       if (!isRemoteMode()) {
         onProgress?.(created.length, created.length);
@@ -1040,13 +1245,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           if (saved) {
             dequeue(`ins-${task.id}`);
             synced += 1;
-            setTasks((prev) => {
-              const next = prev
-                .map((t) => (t.id === task.id ? saved : t))
-                .sort(byScheduledTime);
-              saveSnapshot(next, tasksDateRef.current);
-              return next;
-            });
+            replaceTask(task.id, saved);
           }
         } catch (err) {
           console.warn("[FlowMirror] 批量导入中断（保留离线队列待补录）：", err);
@@ -1066,7 +1265,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       }
       return created.length;
     },
-    [pushToast]
+    [pushToast, replaceTask]
   );
 
   /**
@@ -1079,11 +1278,19 @@ export function FlowProvider({ children }: { children: ReactNode }) {
    *     必须把它的 insert 操作一并撤销；否则网络恢复后补录会把它「复活」。
    *  3) 只有服务端 uuid 才值得发起远端删除。本地临时 id（`task-xxx`）打给
    *     Supabase 会因 uuid 解析失败而报错，失败操作会永久留在队列里反复重试。
+   *
+   * 两个池都按 id 清一次：id 全局唯一，所以这是幂等的，也让「待执行池的删除」
+   * 不需要先查它住在哪个池 —— 少一个可能失配的分支，就少一类「删了又回来」的 bug。
    */
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => {
       const next = prev.filter((t) => t.id !== id);
       saveSnapshot(next, tasksDateRef.current);
+      return next;
+    });
+    setBacklogTasks((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      saveBacklogSnapshot(next);
       return next;
     });
     // 关掉可能正指向该任务的详情 / 微复盘抽屉，避免留下指向已删数据的浮层
@@ -1106,6 +1313,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // 解冻同样只针对当日看板（与 fuse 对称）：待执行池从未被冻结过
   const unfreeze = useCallback(() => {
     setCareMode(false);
     setTasks((prev) => {
@@ -1128,11 +1336,14 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const openDetail = useCallback((id: string) => setDetailTaskId(id), []);
   const closeDetail = useCallback(() => setDetailTaskId(null), []);
 
-  const reviewTask = tasks.find((t) => t.id === reviewTaskId) ?? null;
-  const detailTask = tasks.find((t) => t.id === detailTaskId) ?? null;
+  // 跨池查找：待执行池里的任务同样能打开详情 / 微复盘
+  const reviewTask = reviewTaskId ? (findTask(reviewTaskId) ?? null) : null;
+  const detailTask = detailTaskId ? (findTask(detailTaskId) ?? null) : null;
 
   const value: FlowContextValue = {
     tasks,
+    backlogTasks,
+    findTask,
     careMode,
     candleMode,
     reviewTaskId,
@@ -1186,6 +1397,31 @@ function byScheduledTime(a: Task, b: Task): number {
 }
 
 /**
+ * 「待执行清单」池的排序：**新记的排在最前**。
+ * 与灵感流同向 —— 刚丢进池子的东西应该在你视线所在之处，而不是沉到底部。
+ * 缺 createdAt 的历史数据排在最后（而不是被当成 1970 年顶到最前）。
+ */
+function byCreatedAtDesc(a: Task, b: Task): number {
+  const ka = a.createdAt ?? "";
+  const kb = b.createdAt ?? "";
+  if (!ka && !kb) return 0;
+  if (!ka) return 1;
+  if (!kb) return -1;
+  return kb.localeCompare(ka);
+}
+
+/**
+ * 划分两个池的唯一判据：`rest`（待执行清单）是**全局常驻池**，其余按日归属。
+ *
+ * 与 `QUADRANT_META` / `CATEGORY_META` 的口径一致（q3 ↔ rest）。
+ * 两个池严格互斥 —— 这是所有按 id 查找/写入逻辑能够保持简单的根基：
+ * 一个任务只可能出现在一处，不需要处理「两边都有一份、改哪一份」的问题。
+ */
+function isDayPoolTask(task: Task): boolean {
+  return task.category !== "rest";
+}
+
+/**
  * 服务端主键（Supabase uuid）判定。
  * 本地乐观新增的任务 id 形如 `task-lx9f2k`，直接拿去打 Supabase 会因 uuid
  * 解析失败而报错，失败的操作会一直滞留在离线队列里被反复重试。
@@ -1224,5 +1460,6 @@ function rowToTaskLocal(row: Record<string, unknown>): Task {
     insights: (row.insights as string[]) ?? [],
     sops: (row.sops as string[]) ?? [],
     pitfalls: (row.pitfalls as string[]) ?? [],
+    createdAt: (row.created_at as string) ?? undefined,
   };
 }

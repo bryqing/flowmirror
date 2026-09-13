@@ -16,7 +16,8 @@ import {
 import { useFlow } from "@/components/flow-context";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { thoughtRepo } from "@/lib/thought-repository";
+import { thoughtRepo, localDateKey } from "@/lib/thought-repository";
+import { formatStamp } from "@/lib/task-time";
 import { useAiStream } from "@/lib/use-ai-stream";
 import { extractTags, stripTags } from "@/lib/tags";
 import { CATEGORY_META, type Task, type TaskCategory, type Thought } from "@/lib/types";
@@ -28,54 +29,49 @@ import { cn } from "@/lib/utils";
  * - 随记闪念，不与执行任务混淆
  * - 支持 #标签 语法解析 + 标签胶囊即时筛选 + 关键词搜索
  * - 每卡支持「拓展思路」（DeepSeek 流式）+「转为待办」（四象限入格）
- * - 按全局选中日期归档回查；「全部搜索」模式可打破单日限制检索历史
+ *
+ * **常驻全局库**：不按日期归档、也不按日期过滤 —— 无论顶部日期栏切到哪一天，
+ * 这里始终是同一份全量集合。日期栏控制的是「每日战局」的切片，与灵感库无关。
  */
 export function ThoughtStream() {
-  const { selectedDate, tasks, addTask, pushToast } = useFlow();
+  const { findTask, addTask, pushToast, synced } = useFlow();
 
-  // 灵感列表（当前视口）：按日 or 全部检索
+  // 灵感列表（全局全量）
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [input, setInput] = useState("");
-  const [loadedDate, setLoadedDate] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [expandingId, setExpandingId] = useState<string | null>(null);
 
-  // 检索状态
+  // 检索状态（纯本地过滤：关键词 + 标签，不再需要「是否打破单日限制」那套分支）
   const [keyword, setKeyword] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
-  // 是否处于「全部搜索」模式（有检索意图时打破单日限制）
-  const searchMode = keyword.trim().length > 0 || activeTag !== null;
+  const filtering = keyword.trim().length > 0 || activeTag !== null;
 
   // 转待办弹窗
   const [pickerThought, setPickerThought] = useState<Thought | null>(null);
   const [convertingId, setConvertingId] = useState<string | null>(null);
 
-  // 加载中 = 尚未完成当前视口的加载（派生，避免在 effect 里同步 setState）
-  const loading = !searchMode && loadedDate !== selectedDate;
+  // 加载中 = 首次全量拉取尚未完成（派生，避免在 effect 里同步 setState）
+  const loading = !loaded;
 
   // 流式拓展
   const { reply: expandText, streaming, error: expandError, send: streamExpand } =
     useAiStream("/api/ai/expand-thought");
 
-  // 拉取数据：按日 or 全量（selectedDate / searchMode 变化时触发）
+  // 拉取数据：一次性拿全量。
+  // 依赖 synced 而不是挂载一次 —— 登录 / 登出会切换数据源（本地快照 ↔ 云端），
+  // 必须在那一刻重拉，否则登录后看到的还是本地那几条。
   useEffect(() => {
     let cancelled = false;
-    if (searchMode) {
-      thoughtRepo.fetchAll().then((list) => {
-        if (cancelled) return;
-        setThoughts(list);
-        setLoadedDate(null);
-      });
-    } else {
-      thoughtRepo.fetchByDate(selectedDate).then((list) => {
-        if (cancelled) return;
-        setThoughts(list);
-        setLoadedDate(selectedDate);
-      });
-    }
+    thoughtRepo.fetchAll().then((list) => {
+      if (cancelled) return;
+      setThoughts(list);
+      setLoaded(true);
+    });
     return () => {
       cancelled = true;
     };
-  }, [selectedDate, searchMode]);
+  }, [synced]);
 
   // 常用标签（从当前列表聚合，按出现频次排序）
   const allTags = useMemo(() => {
@@ -109,7 +105,9 @@ export function ThoughtStream() {
     const tags = extractTags(text);
     const content = stripTags(text) || text;
     try {
-      const saved = await thoughtRepo.insert(content, selectedDate, tags);
+      // date 用**真实录入日**而不是当前查看的日期：灵感库是全局的，
+      // 翻到历史日期时记的一条不该被归档到那天去（createdAt 与它必须一致）。
+      const saved = await thoughtRepo.insert(content, localDateKey(), tags);
       if (saved) {
         setInput("");
         setThoughts((prev) => [saved, ...prev]);
@@ -171,10 +169,12 @@ export function ThoughtStream() {
         <h3 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
           <Lightbulb className="size-4 text-candle" />
           灵感与思考
-          <span className="font-normal text-subtle-foreground">Thought Stream · 随记闪念</span>
+          <span className="hidden font-normal text-subtle-foreground sm:inline">
+            Thought Stream · 全局随记
+          </span>
         </h3>
         <p className="text-[11px] text-subtle-foreground">
-          {searchMode ? `${visible.length} 条命中` : `${thoughts.length} 条`}
+          {filtering ? `${visible.length} 条命中` : `${thoughts.length} 条`}
         </p>
       </div>
 
@@ -205,7 +205,7 @@ export function ThoughtStream() {
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder={searchMode ? "搜索全部灵感（打破单日限制）…" : "搜索当前日期的灵感…"}
+            placeholder="搜索全部灵感与思考…"
             className="h-9 w-full rounded-xl border border-white/10 bg-white/[0.04] pl-9 pr-8 text-sm text-foreground placeholder:text-subtle-foreground outline-none transition-all focus:border-cat-deep/40 focus:ring-2 focus:ring-ring"
           />
           {keyword && (
@@ -263,7 +263,9 @@ export function ThoughtStream() {
           <div className="glass flex flex-col items-center gap-2 rounded-2xl py-8 text-center">
             <Lightbulb className="size-5 text-candle/50" />
             <p className="text-xs text-subtle-foreground">
-              {searchMode ? "没有匹配的灵感。换个关键词或标签试试。" : "这一天还没有灵感记录。捕捉一个转瞬即逝的念头吧。"}
+              {filtering
+                ? "没有匹配的灵感。换个关键词或标签试试。"
+                : "还没有灵感记录。捕捉一个转瞬即逝的念头吧。"}
             </p>
           </div>
         )}
@@ -272,7 +274,7 @@ export function ThoughtStream() {
           <ThoughtCard
             key={t.id}
             thought={t}
-            linkedTask={t.taskId ? tasks.find((task) => task.id === t.taskId) : undefined}
+            linkedTask={t.taskId ? findTask(t.taskId) : undefined}
             expanding={expandingId === t.id}
             streamingText={expandingId === t.id ? expandText : ""}
             converting={convertingId === t.id}
@@ -317,15 +319,8 @@ function ThoughtCard({
   onRemove: () => void;
   onConvert: () => void;
 }) {
-  const time = useMemo(() => {
-    try {
-      const d = new Date(thought.createdAt);
-      if (isNaN(d.getTime())) return "";
-      return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-    } catch {
-      return "";
-    }
-  }, [thought.createdAt]);
+  // 完整时间戳（年月日 + 时分）：灵感库是长期常驻的，只给「09:47」无法定位到哪一天
+  const time = useMemo(() => formatStamp(thought.createdAt, { full: true }), [thought.createdAt]);
 
   const linkedMeta = linkedTask ? CATEGORY_META[linkedTask.category] : null;
 
@@ -338,7 +333,9 @@ function ThoughtCard({
           <p className="text-sm leading-relaxed text-foreground/90">{thought.content}</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {time && (
-              <span className="font-mono text-[10px] text-subtle-foreground">{time}</span>
+              <span data-thought-time className="font-mono text-[10px] text-subtle-foreground">
+                {time}
+              </span>
             )}
             {thought.tags.map((tag) => (
               <span

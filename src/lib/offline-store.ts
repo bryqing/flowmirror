@@ -17,6 +17,16 @@ const QUEUE_KEY = "flowmirror:tasks:queue";
  */
 const LEGACY_SNAPSHOT_KEY = "flowmirror:tasks:snapshot";
 
+/**
+ * 「待执行清单」（Q3）全局池的快照键 —— **刻意不按日期分片**。
+ *
+ * 该池是常驻的、与 selectedDate 无关的全量集合。若把它混进 `snapshot:<date>`：
+ *   · 切到任意一天回看，池子会被那天的数据覆盖（条目「凭空消失」）；
+ *   · 反过来在池子里增删，也会把某一天的历史快照写脏。
+ * 所以它必须自带一个稳定键，和按日快照完全隔离。
+ */
+const BACKLOG_SNAPSHOT_KEY = "flowmirror:tasks:backlog";
+
 /** 本地时区的今天（YYYY-MM-DD）。不能 import todayKey：那会引入 supabase 依赖链 */
 function localToday(): string {
   const d = new Date();
@@ -64,11 +74,39 @@ export function saveSnapshot(tasks: Task[], dateKey: string): void {
   safeSet(snapshotKey(dateKey), tasks);
 }
 
+/**
+ * 补齐本地快照里可能缺失的数组字段。
+ *
+ * localStorage 是**不可信输入**：旧版本写的快照、手工改过的数据、跨版本升级遗留的
+ * 记录，都可能缺 `timeSlices` / `microReviews` 等字段。这些字段在类型上是必填的，
+ * 渲染层会直接 `.some` / `.length`（见 task-time 的 isTiming / deriveHeatmap、卡片上的
+ * microReviews.length）—— 只要有一条缺失，渲染时就抛错，React 会把**整个应用**
+ * 卸载成白屏（实测：仅 1 条缺 timeSlices 的待办就足以让全站消失）。
+ *
+ * 远端路径已由 `rowToTask` 兜底（全部 `?? []`），这里把本地路径补齐，两侧口径一致。
+ */
+function normalizeTask(t: Task): Task {
+  return {
+    ...t,
+    timeSlices: t.timeSlices ?? [],
+    microReviews: t.microReviews ?? [],
+    insights: t.insights ?? [],
+    sops: t.sops ?? [],
+    pitfalls: t.pitfalls ?? [],
+  };
+}
+
+/** 快照数组归一化：非数组（脏数据）一律当作「没有快照」 */
+function normalizeTasks(list: unknown): Task[] | null {
+  if (!Array.isArray(list)) return null;
+  return (list as Task[]).map(normalizeTask);
+}
+
 /** 读取指定日期的任务快照（今日可回退到旧版无日期键） */
 export function loadSnapshot(dateKey: string): Task[] | null {
-  const scoped = safeGet<Task[]>(snapshotKey(dateKey));
+  const scoped = normalizeTasks(safeGet<Task[]>(snapshotKey(dateKey)));
   if (scoped) return scoped;
-  if (dateKey === localToday()) return safeGet<Task[]>(LEGACY_SNAPSHOT_KEY);
+  if (dateKey === localToday()) return normalizeTasks(safeGet<Task[]>(LEGACY_SNAPSHOT_KEY));
   return null;
 }
 
@@ -81,6 +119,16 @@ export function clearSnapshot(dateKey: string): void {
   } catch {
     /* ignore */
   }
+}
+
+/** 读取「待执行清单」全局池快照（不存在返回 null；空数组是有效值，代表「池子已清空」） */
+export function loadBacklogSnapshot(): Task[] | null {
+  return normalizeTasks(safeGet<Task[]>(BACKLOG_SNAPSHOT_KEY));
+}
+
+/** 保存「待执行清单」全局池快照 */
+export function saveBacklogSnapshot(tasks: Task[]): void {
+  safeSet(BACKLOG_SNAPSHOT_KEY, tasks);
 }
 
 /** 读取待同步队列 */

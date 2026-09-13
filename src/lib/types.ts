@@ -70,6 +70,14 @@ export interface Task {
   pitfalls: string[];
   /** 黑洞倒计时（仅 category=blackhole，分钟） */
   blackholeMinutes?: number;
+  /**
+   * 创建时间（ISO 字符串，来自 Supabase `created_at`）。
+   *
+   * 「待执行清单」是**不受日期约束的常驻池**，条目上没有「归属日」可比对，
+   * 唯一能追溯「什么时候记下来的」就是它 —— 卡片副标题据此渲染。
+   * 早期本地数据 / 演示数据可能没有该字段，展示层须容忍缺失（不要编造时间）。
+   */
+  createdAt?: string;
 }
 
 /** 昨日之镜 */

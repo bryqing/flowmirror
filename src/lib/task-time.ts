@@ -276,6 +276,33 @@ export function shiftDateKey(dateKey: string, deltaDays: number): string {
 }
 
 /** "2026-09-11" → "9月11日 · 周五"（昨日之镜的日期标签） */
+/**
+ * 时间戳 → 展示文案。
+ *
+ * `full: false`（默认）→ 「09-13 15:30」，跨年才补年份（「2025-12-31 15:30」）；
+ * `full: true` → 恒为「2026-09-13 15:30」。
+ *
+ * 为什么默认省年份：待执行池里绝大多数条目都是近期的，四条数字的年份一直重复
+ * 只会挤占本就紧张的卡片宽度；而一旦跨年又必须能一眼看出来，所以按「是否今年」
+ * 决定，而不是无脑省略。灵感流要求「补齐年月日」，用 full。
+ *
+ * ⚠️ 这不是「格式化」而是**能否展示**的判断依据：传空 / 非法值返回 null，
+ * 让调用方直接不渲染，避免在界面上留下一个 1970 年的假时间。
+ */
+export function formatStamp(
+  iso: string | undefined | null,
+  opts: { full?: boolean; now?: Date } = {}
+): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const p = (n: number) => String(n).padStart(2, "0");
+  const md = `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  if (opts.full) return `${d.getFullYear()}-${md}`;
+  const now = opts.now ?? new Date();
+  return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}-${md}`;
+}
+
 export function fmtDateLabel(dateKey: string): string {
   const [y, m, d] = dateKey.split("-").map(Number);
   const date = new Date(y, (m ?? 1) - 1, d ?? 1);
