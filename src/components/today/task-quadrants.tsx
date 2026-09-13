@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   Loader2,
+  Pencil,
   Play,
   Plus,
   Snowflake,
@@ -38,8 +39,17 @@ const RING_COLORS: Record<TaskCategory, string> = {
 };
 
 export function TaskQuadrants() {
-  const { tasks, openDetail, completeTask, addTask, deleteTask, pushToast, setTaskTime, toggleTiming } =
-    useFlow();
+  const {
+    tasks,
+    openDetail,
+    completeTask,
+    addTask,
+    deleteTask,
+    pushToast,
+    setTaskTime,
+    toggleTiming,
+    renameTask,
+  } = useFlow();
 
   // mounted：SSR 与客户端首帧渲染占位，挂载后再展示动态任务数据，
   // 避免任务列表（本地快照/远程）在首帧与 SSR 不一致导致 Hydration 报错。
@@ -149,6 +159,7 @@ export function TaskQuadrants() {
                     onComplete={() => completeTask(task.id)}
                     onSetTime={(start, duration) => setTaskTime(task.id, start, duration)}
                     onToggleTiming={() => toggleTiming(task.id)}
+                    onRename={(title) => renameTask(task.id, title)}
                     onDelete={() => {
                       deleteTask(task.id);
                       pushToast(`已删除「${task.title}」`, "info");
@@ -315,6 +326,11 @@ function RingProgress({
  * 删除采用**行内二次确认**而非 window.confirm：任务可能挂着微复盘、
  * 时间切片等不可再生数据，误删代价高；而原生弹窗会打断视觉风格。
  * 确认态直接复用同一条目占位，不撑高卡片，也不会造成列表跳动。
+ *
+ * 标题支持**就地编辑**（点标题文字或铅笔）：
+ *   回车 / 失焦保存，ESC 放弃，空值与未改动都当放弃处理。
+ *   ⚠️ 编辑态下卡片本体的 click 与 Enter 必须让路 —— 卡片整体是「打开详情」的
+ *   热区，不拦的话点一下标题会同时弹出抽屉，输入框还没开始写就被盖住。
  */
 function TaskChip({
   task,
@@ -322,6 +338,7 @@ function TaskChip({
   onComplete,
   onSetTime,
   onToggleTiming,
+  onRename,
   onDelete,
 }: {
   task: Task;
@@ -329,9 +346,16 @@ function TaskChip({
   onComplete: () => void;
   onSetTime: (startClock: string | undefined, durationMin: number | undefined) => void;
   onToggleTiming: () => void;
+  onRename: (title: string) => void;
   onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  /** 是否处于行内改名态 */
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(task.title);
+  const editInputRef = useRef<HTMLInputElement | null>(null);
+  /** 本次编辑是否已被「回车 / ESC」了结 —— 挡住紧随其后的 blur，避免提交两次 */
+  const settledRef = useRef(false);
 
   const frozen = task.status === "frozen";
   const done = task.status === "done";
@@ -342,6 +366,32 @@ function TaskChip({
   const timingSince = openSliceStart(task);
   /** 已记录时长（真实计时累计） */
   const recorded = recordedMinutes(task);
+
+  const beginEdit = () => {
+    if (frozen) return;
+    setDraft(task.title);
+    settledRef.current = false;
+    setEditing(true);
+  };
+
+  useEffect(() => {
+    if (!editing) return;
+    const el = editInputRef.current;
+    if (!el) return;
+    el.focus();
+    // 光标落在末尾而非全选：改标题多是补字改词，全选会让随手一敲清空原文
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [editing]);
+
+  const finishEdit = (commit: boolean) => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    const next = draft.trim();
+    setEditing(false);
+    if (!commit) return;
+    if (!next || next === task.title) return; // 空 / 未改动 → 当放弃，不写云端
+    onRename(next);
+  };
 
   if (confirming) {
     return (
@@ -370,9 +420,13 @@ function TaskChip({
     <div
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={() => {
+        // 改名进行中就别顺手把详情抽屉也拉出来（输入框会被盖住，白改）
+        if (editing) return;
+        onOpen();
+      }}
       onKeyDown={(e) => {
-        if (e.key !== "Enter") return;
+        if (editing || e.key !== "Enter") return;
         // 卡片里嵌了时间段入口、计时、打钩、删除等控件，它们自己会处理 Enter；
         // 只有焦点落在卡片本体时才打开详情，否则会在抽屉里再叠一层。
         if (e.target !== e.currentTarget) return;
@@ -416,14 +470,61 @@ function TaskChip({
         className={done ? "line-through opacity-70" : undefined}
       />
 
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate text-xs",
-          done ? "text-zinc-500 line-through" : "font-medium text-zinc-100"
-        )}
-      >
-        {task.title}
-      </span>
+      {editing ? (
+        <input
+          ref={editInputRef}
+          value={draft}
+          data-task-title-input
+          aria-label={`编辑任务标题「${task.title}」`}
+          maxLength={120}
+          onChange={(e) => setDraft(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            // 卡片本体的 Enter 是「打开详情」，这里必须自己吃掉
+            e.stopPropagation();
+            if (e.key === "Enter") {
+              e.preventDefault();
+              finishEdit(true);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              finishEdit(false);
+            }
+          }}
+          onBlur={() => finishEdit(true)}
+          className="min-w-0 flex-1 rounded-md border border-cat-deep/45 bg-white/[0.07] px-1.5 py-0.5 text-xs text-foreground outline-none ring-2 ring-cat-deep/15 placeholder:text-subtle-foreground"
+        />
+      ) : (
+        <span
+          data-task-title
+          onClick={(e) => {
+            e.stopPropagation(); // 点标题 = 就地改名，不再打开详情
+            beginEdit();
+          }}
+          title={frozen ? undefined : "点击修改标题"}
+          className={cn(
+            "min-w-0 flex-1 truncate text-xs",
+            done ? "text-zinc-500 line-through" : "font-medium text-zinc-100",
+            !frozen && "cursor-text"
+          )}
+        >
+          {task.title}
+        </span>
+      )}
+
+      {/* 编辑入口。移动端不渲染：那里直接点标题即可改名，多一个控件只会挤窄文字 */}
+      {!editing && !frozen && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            beginEdit();
+          }}
+          aria-label={`编辑任务「${task.title}」`}
+          title="编辑标题"
+          className="hidden size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-deep/15 hover:text-cat-deep sm:flex"
+        >
+          <Pencil className="size-3.5" />
+        </button>
+      )}
 
       {/* 轻量计时：开始 / 结束，结束时累计进 actualDuration 并驱动热力大盘 */}
       <button

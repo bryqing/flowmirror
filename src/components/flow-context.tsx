@@ -98,6 +98,11 @@ interface FlowContextValue {
   stopTiming: (id: string) => void;
   /** 按当前计时状态自动开始 / 结束 */
   toggleTiming: (id: string) => void;
+  /**
+   * 就地改任务标题（四象限卡片行内编辑）。
+   * 空字符串 / 与原文相同都会被忽略，不会产生一次无意义的云端写。
+   */
+  renameTask: (id: string, title: string) => void;
   completeTask: (id: string) => void;
   closeReview: () => void;
   submitReview: (id: string, review: Omit<MicroReview, "id" | "createdAt">) => void;
@@ -529,6 +534,28 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       });
     }
   }, []);
+
+  /**
+   * 就地改任务标题。
+   *
+   * 走和 setTaskTime 同一条 commitTask 出口，不单独再写一遍三件套 ——
+   * 漏快照则刷新回滚，漏入队则断网丢改动，两个 bug 都只在刷新/断网时才暴露。
+   * 标题只是文案、不触碰时间切片，所以「正在计时」也不拦；但冷冻任务视为只读。
+   *
+   * 不加 toast：改名的反馈就是卡片上那行字当场变了，再弹一条反而吵。
+   * （空串 / 未改动直接吞掉，避免用户点一下标题又点出去就产生一条云端写。）
+   */
+  const renameTask = useCallback(
+    (id: string, title: string) => {
+      const next = title.trim();
+      if (!next) return;
+      const target = tasks.find((t) => t.id === id);
+      if (!target || target.title === next) return;
+      if (target.status === "frozen") return;
+      commitTask({ ...target, title: next });
+    },
+    [tasks, commitTask]
+  );
 
   /**
    * 标记任务的「时间段」—— 热力大盘的主力数据来源。
@@ -1131,6 +1158,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     startTiming,
     stopTiming,
     toggleTiming,
+    renameTask,
     completeTask,
     closeReview,
     submitReview,

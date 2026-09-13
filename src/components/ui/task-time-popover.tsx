@@ -13,8 +13,13 @@ import { minutesToClock, toMinutes } from "@/lib/task-time";
  * 为什么不用原生 `<input type="time">`：
  *   与原生 `<select>` 同一个坑 —— 弹出部分由操作系统渲染，暗色主题下不可控；
  *   而且桌面端要点两下箭头、移动端要滚轮，对「随手标一下这段时间」太重。
- *   这里改成 时/分 两个下拉（复用已经验证过的 `ui/dark-select.tsx`）+ 时长胶囊，
- *   两次点击就能标完一段。
+ *   这里改成 时 / 分 / 时长 三个下拉，全部复用已经验证过的 `ui/dark-select.tsx`，
+ *   三次点击就能标完一段。
+ *
+ * 时长当初是一排胶囊（15/25/45/60/90/120），现在改成 5 分钟一档、封顶 10 小时的
+ * 全量下拉：胶囊只覆盖了「番茄钟/整点」这几种理想值，而真实场景里「先干 70 分钟
+ * 再看」这种需求一点办法没有，用户只能凑到最近的一档 —— 标出来的时间本身就是假的，
+ * 下游热力图也就跟着失真。下拉把 120 档全铺开，想标多少标多少。
  *
  * 沿用同类浮层的三条铁律（与 calendar-popover / dark-select 一致）：
  *   1. **Portal 到 document.body** —— 调用方在四象限卡片里，祖先带 `overflow`，
@@ -44,8 +49,22 @@ const GAP = 8;
 const EDGE = 8;
 const PANEL_WIDTH = 268;
 
-/** 时长预设（分钟）：番茄钟 / 半小时 / 整点 / 深工作块 */
-const DURATION_PRESETS = [15, 25, 45, 60, 90, 120] as const;
+/** 时长步长（分钟） */
+const DURATION_STEP = 5;
+/** 时长上限：10 小时。热力图按小时聚合，再往上加档位也没有信息增量 */
+const DURATION_MAX_MINUTES = 600;
+
+/**
+ * 分钟数 → 直观文案："50分钟" / "1小时" / "1小时15分" / "10小时"。
+ * 刻意不复用 `utils.fmtDuration`（它产出的是 "50分"）：下拉里每行单独成项，
+ * 少一个「钟」字读起来会像「50 分」（分数）而不是时长。
+ */
+function formatDurationLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes}分钟`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h}小时` : `${h}小时${m}分`;
+}
 
 const HOUR_OPTIONS: DarkSelectOption<string>[] = Array.from({ length: 24 }, (_, h) => ({
   value: String(h),
@@ -57,6 +76,20 @@ const MINUTE_OPTIONS: DarkSelectOption<string>[] = Array.from({ length: 12 }, (_
   value: String(i * 5),
   label: String(i * 5).padStart(2, "0"),
 }));
+
+/**
+ * 时长全量选项：5 分钟一档、封顶 10 小时（5…600，共 120 档）。
+ *
+ * 首项空值不是时长，而是「清掉时长、只保留开始时刻」的出口 ——
+ * 底部的「清除」是连开始时刻一起抹掉，两者语义不同，都需要。
+ */
+const DURATION_OPTIONS: DarkSelectOption<string>[] = [
+  { value: "", label: "未设置" },
+  ...Array.from({ length: DURATION_MAX_MINUTES / DURATION_STEP }, (_, i) => {
+    const minutes = (i + 1) * DURATION_STEP;
+    return { value: String(minutes), label: formatDurationLabel(minutes) };
+  }),
+];
 
 const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
@@ -156,6 +189,7 @@ export function TaskTimePopover({
     if (!draftDuration) return null;
     return minutesToClock(startHour * 60 + startMinute + draftDuration);
   }, [draftDuration, startHour, startMinute]);
+  const previewDuration = draftDuration ? formatDurationLabel(draftDuration) : null;
 
   const commit = () => {
     onChange(draftDuration || hasStart ? startClock : undefined, draftDuration);
@@ -296,39 +330,33 @@ export function TaskTimePopover({
               </button>
             </div>
 
-            {/* 时长预设 */}
-            <div className="mt-3 flex flex-col gap-1.5">
+            {/* 时长：5 分钟一档、封顶 10 小时的全量下拉（复用暗色 DarkSelect） */}
+            <div className="mt-3 flex flex-col gap-1">
               <span className="text-[10px] text-subtle-foreground">时长</span>
-              <div className="flex flex-wrap gap-1.5">
-                {DURATION_PRESETS.map((m) => {
-                  const active = draftDuration === m;
-                  return (
-                    <button
-                      key={m}
-                      type="button"
-                      data-duration={m}
-                      onClick={() => {
-                        setDraftDuration(active ? undefined : m);
-                        setHasStart(true);
-                      }}
-                      className={cn(
-                        "rounded-lg border px-2 py-1 font-mono text-[10px] tabular-nums transition-colors",
-                        active
-                          ? "border-cat-deep/45 bg-cat-deep/15 text-cat-deep"
-                          : "border-white/10 bg-white/[0.04] text-muted-foreground hover:border-white/25 hover:text-foreground"
-                      )}
-                    >
-                      {m < 60 ? `${m}分` : `${m / 60}小时`}
-                    </button>
-                  );
-                })}
-              </div>
+              <DarkSelect
+                value={draftDuration ? String(draftDuration) : ""}
+                options={DURATION_OPTIONS}
+                onChange={(v) => {
+                  const minutes = v === "" ? undefined : Number(v);
+                  setDraftDuration(minutes);
+                  // 选了实际时长即可认为「有开始时刻」；选了「未设置」则不表态
+                  if (minutes) setHasStart(true);
+                }}
+                ariaLabel="任务时长"
+                title="以 5 分钟为步长，最长 10 小时"
+                className="w-full justify-between py-1"
+              />
             </div>
 
             {/* 预览 + 操作 */}
             <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/[0.07] pt-2.5">
-              <span className="font-mono text-[10px] tabular-nums text-subtle-foreground">
-                {previewEnd ? `${startClock}–${previewEnd}` : startClock}
+              <span
+                data-time-preview
+                className="min-w-0 flex-1 truncate font-mono text-[10px] tabular-nums text-subtle-foreground"
+              >
+                {previewEnd
+                  ? `${startClock}–${previewEnd}${previewDuration ? ` · ${previewDuration}` : ""}`
+                  : startClock}
               </span>
               <div className="flex items-center gap-1.5">
                 <button
