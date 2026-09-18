@@ -1,10 +1,7 @@
 import { FlowProvider } from "@/components/flow-context";
 import { AppShell } from "@/components/layout/app-shell";
 import { Toaster } from "@/components/layout/command-bar";
-import { YesterdayMirror } from "@/components/mirror/yesterday-mirror";
-import { TodayFlow } from "@/components/today/today-flow";
-import { TimeHeatmap } from "@/components/heatmap/time-heatmap";
-import { ThoughtStream } from "@/components/thoughts/thought-stream";
+import { Dashboard } from "@/components/layout/dashboard";
 import { TaskDetailDrawer } from "@/components/today/task-detail-drawer";
 import { ReviewDrawer } from "@/components/review/review-drawer";
 
@@ -12,20 +9,8 @@ export default function Home() {
   return (
     <FlowProvider>
       <AppShell>
-        <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 pb-24 pt-5 sm:gap-10 sm:px-6">
-          {/* 第一层（最顶）：昨日之镜 —— 晨间第一眼先看见昨天的反思与教训 */}
-          <YesterdayMirror />
-
-          {/* 第二层（居中核心主战场）：今日战局
-              顶部自然语言调度吸附条 + 日期胶囊条 → 晨间金句 → 2x2 四象限大盘 */}
-          <TodayFlow />
-
-          {/* 第三层：今日时间分布 · 24小时黑洞热力大盘 */}
-          <TimeHeatmap />
-
-          {/* 第四层：灵感与思考流 —— 随记闪念 + AI 拓展 + 按日回查 */}
-          <ThoughtStream />
-        </main>
+        {/* 看板主体：晨间心锚 + 五大板块导航 + 单页切换 */}
+        <Dashboard />
 
         {/* 抽屉层：任务详情 / 微复盘 */}
         <TaskDetailDrawer />

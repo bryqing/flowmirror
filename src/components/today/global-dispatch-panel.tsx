@@ -90,13 +90,13 @@ export function GlobalDispatchPanel() {
           {/* 内容区 */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {emptyMessage && !streaming && (
-              <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm text-muted-foreground">
                 {emptyMessage}
               </div>
             )}
 
             {!emptyMessage && !streaming && !reply && !error && (
-              <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm text-muted-foreground">
                 点击右上角「开始分析」，让战术指挥官为你研判当前四象限战局，给出冲刺顺序与熔断建议。
               </div>
             )}

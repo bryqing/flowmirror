@@ -46,13 +46,13 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#09090b",
+  themeColor: "#f8fafc",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
   maximumScale: 1,
   userScalable: false,
-  colorScheme: "dark",
+  colorScheme: "light",
 };
 
 /**
@@ -80,7 +80,7 @@ const BOOT_WATCHDOG = `(function(){
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = '重新加载';
-    btn.style.cssText = 'flex:0 0 auto;background:#f59e0b;color:#1c1408;border:0;border-radius:10px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer';
+    btn.style.cssText = 'flex:0 0 auto;background:#d97706;color:#ffffff;border:0;border-radius:10px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer';
     btn.onclick = function(){ window.location.reload(); };
     box.appendChild(text);
     box.appendChild(btn);

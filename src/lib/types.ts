@@ -294,8 +294,8 @@ export function coerceQuadrant(value: unknown): Quadrant | null {
 /** 优先级显示名与配色（避开玫瑰色，避免与 q4 象限色混淆） */
 export const PRIORITY_META: Record<TaskPriority, { label: string; className: string }> = {
   high: { label: "高", className: "border-candle/35 bg-candle/10 text-candle" },
-  medium: { label: "中", className: "border-white/15 bg-white/[0.06] text-zinc-300" },
-  low: { label: "低", className: "border-white/10 bg-white/[0.03] text-subtle-foreground" },
+  medium: { label: "中", className: "border-slate-300 bg-slate-100 text-slate-700" },
+  low: { label: "低", className: "border-slate-200 bg-slate-50 text-subtle-foreground" },
 };
 
 /**

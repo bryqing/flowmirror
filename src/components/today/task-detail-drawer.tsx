@@ -237,7 +237,7 @@ export function TaskDetailDrawer() {
             </p>
             <ol className="flex flex-col gap-1.5">
               {detailTask.sops.map((sop, i) => (
-                <li key={i} className="flex gap-2.5 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                <li key={i} className="flex gap-2.5 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
                   <span className="font-mono text-[10px] text-cat-deep/70">{String(i + 1).padStart(2, "0")}</span>
                   {sop}
                 </li>
@@ -322,7 +322,7 @@ function TimerRing({ progress, color }: { progress: number; color: "deep" | "bla
   return (
     <span className="relative inline-flex size-16 shrink-0 items-center justify-center">
       <svg viewBox="0 0 64 64" className="size-16 -rotate-90">
-        <circle cx="32" cy="32" r={R} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
+        <circle cx="32" cy="32" r={R} fill="none" stroke="rgba(15,23,42,0.1)" strokeWidth="4" />
         <circle
           cx="32"
           cy="32"

@@ -50,21 +50,21 @@ export function CommandBar() {
       <div
         className={cn(
           "glass-strong rounded-2xl px-4 py-3.5 sm:px-5",
-          "shadow-[0_0_28px_-10px_rgba(103,232,249,0.25),0_4px_24px_rgba(0,0,0,0.4)]",
+          "shadow-[0_0_0_1px_rgba(13,148,136,0.06),0_8px_24px_-12px_rgba(15,23,42,0.15)]",
           focused &&
-            "border-cat-deep/40 shadow-[0_0_0_3px_rgba(103,232,249,0.09),0_0_36px_-8px_rgba(103,232,249,0.35),0_4px_24px_rgba(0,0,0,0.4)]"
+            "border-cat-deep/40 shadow-[0_0_0_3px_rgba(13,148,136,0.1),0_8px_28px_-10px_rgba(13,148,136,0.25)]"
         )}
       >
         {/* 单行命令条：品牌标识 + 自然语言输入 + 快捷键 + 提交 */}
         <div className="flex items-center gap-2.5">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05]">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100/70">
             <Orbit className="size-4 text-cat-deep" />
           </span>
           <div className="hidden shrink-0 leading-tight md:block">
             <p className="text-xs font-semibold tracking-tight">FlowMirror</p>
             <p className="text-[10px] text-subtle-foreground">自然语言调度</p>
           </div>
-          <span className="hidden h-5 w-px shrink-0 bg-white/10 md:block" />
+          <span className="hidden h-5 w-px shrink-0 bg-slate-100 md:block" />
 
           <Sparkles
             className={cn(
@@ -99,7 +99,7 @@ export function CommandBar() {
                 "relative flex size-7 shrink-0 items-center justify-center rounded-lg transition-all",
                 listening
                   ? "bg-cat-blackhole/20 text-cat-blackhole"
-                  : "bg-white/[0.07] text-muted-foreground hover:bg-cat-deep/20 hover:text-cat-deep"
+                  : "bg-slate-100 text-muted-foreground hover:bg-cat-deep/20 hover:text-cat-deep"
               )}
             >
               {listening && (
@@ -112,7 +112,7 @@ export function CommandBar() {
           <button
             onClick={submit}
             aria-label="执行指令"
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-white/[0.07] text-muted-foreground transition-all hover:bg-cat-deep/20 hover:text-cat-deep"
+            className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-muted-foreground transition-all hover:bg-cat-deep/20 hover:text-cat-deep"
           >
             <ArrowRight className="size-3.5" />
           </button>
@@ -126,7 +126,7 @@ export function CommandBar() {
           )}
         >
           <div className="overflow-hidden">
-            <div className="flex items-start gap-2 rounded-xl border border-white/[0.07] bg-white/[0.04] px-3.5 py-2.5 text-xs leading-relaxed">
+            <div className="flex items-start gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-2.5 text-xs leading-relaxed">
               <span className="mt-0.5 size-1.5 shrink-0 rounded-full bg-cat-deep animate-breathe" />
               <p className="text-muted-foreground" data-command-preview>
                 <span className="mr-1.5 rounded bg-cat-deep/15 px-1.5 py-0.5 text-[10px] font-medium text-cat-deep">
@@ -160,7 +160,7 @@ export function CommandBar() {
                 setValue(s);
                 inputRef.current?.focus();
               }}
-              className="rounded-full border border-white/[0.07] bg-white/[0.03] px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:border-white/15 hover:text-foreground"
+              className="rounded-full border border-slate-100 bg-slate-50 px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:border-slate-300 hover:text-foreground"
             >
               {s}
             </button>

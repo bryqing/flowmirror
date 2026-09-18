@@ -292,7 +292,7 @@ export function QuickCaptureSheet() {
                       "absolute bottom-2.5 right-2.5 flex size-8 items-center justify-center rounded-lg transition-all",
                       listening
                         ? "bg-cat-blackhole/20 text-cat-blackhole"
-                        : "bg-white/[0.07] text-muted-foreground hover:bg-cat-deep/20 hover:text-cat-deep"
+                        : "bg-slate-100 text-muted-foreground hover:bg-cat-deep/20 hover:text-cat-deep"
                     )}
                   >
                     {listening && (
@@ -359,7 +359,7 @@ export function QuickCaptureSheet() {
               {[0, 1, 2, 3].map((i) => (
                 <div
                   key={i}
-                  className="flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5"
+                  className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3.5"
                 >
                   <span className="skeleton-line h-3 w-8 rounded-full" />
                   <span
@@ -399,7 +399,7 @@ export function QuickCaptureSheet() {
                   return (
                     <li
                       key={d.key}
-                      className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-2.5 transition-colors focus-within:border-cat-deep/25"
+                      className="rounded-xl border border-slate-100 bg-slate-50 p-2.5 transition-colors focus-within:border-cat-deep/25"
                     >
                       <div className="flex items-center gap-2">
                         <span className={cn("size-2 shrink-0 rounded-full", dot)} />
@@ -459,7 +459,7 @@ export function QuickCaptureSheet() {
                 手动加一条
               </Button>
 
-              <div className="mt-1 flex items-center gap-2 border-t border-white/[0.07] pt-4">
+              <div className="mt-1 flex items-center gap-2 border-t border-slate-100 pt-4">
                 <Button
                   variant="outline"
                   size="sm"

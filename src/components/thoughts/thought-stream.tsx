@@ -206,7 +206,7 @@ export function ThoughtStream() {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             placeholder="搜索全部灵感与思考…"
-            className="h-9 w-full rounded-xl border border-white/10 bg-white/[0.04] pl-9 pr-8 text-sm text-foreground placeholder:text-subtle-foreground outline-none transition-all focus:border-cat-deep/40 focus:ring-2 focus:ring-ring"
+            className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-8 text-sm text-foreground placeholder:text-subtle-foreground outline-none transition-all focus:border-cat-deep/40 focus:ring-2 focus:ring-ring"
           />
           {keyword && (
             <button
@@ -227,7 +227,7 @@ export function ThoughtStream() {
                 "flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] transition-colors",
                 activeTag === null
                   ? "border-candle/40 bg-candle/15 text-candle"
-                  : "border-white/10 bg-white/[0.04] text-muted-foreground hover:bg-white/[0.08]"
+                  : "border-slate-200 bg-slate-50 text-muted-foreground hover:bg-slate-100"
               )}
             >
               <Tag className="size-3" />
@@ -241,7 +241,7 @@ export function ThoughtStream() {
                   "shrink-0 rounded-full border px-2.5 py-1 text-[11px] transition-colors",
                   activeTag === tag
                     ? "border-cat-deep/40 bg-cat-deep/15 text-cat-deep"
-                    : "border-white/10 bg-white/[0.04] text-muted-foreground hover:bg-white/[0.08]"
+                    : "border-slate-200 bg-slate-50 text-muted-foreground hover:bg-slate-100"
                 )}
               >
                 #{tag}
@@ -340,7 +340,7 @@ function ThoughtCard({
             {thought.tags.map((tag) => (
               <span
                 key={tag}
-                className="rounded-full bg-white/[0.05] px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                className="rounded-full bg-slate-100/70 px-1.5 py-0.5 text-[10px] text-muted-foreground"
               >
                 #{tag}
               </span>

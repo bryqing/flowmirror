@@ -241,8 +241,8 @@ export function TaskTimePopover({
         className={cn(
           "flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] tabular-nums transition-colors",
           marked
-            ? "text-zinc-300 hover:bg-cat-deep/15 hover:text-cat-deep"
-            : "text-subtle-foreground hover:bg-white/[0.08] hover:text-foreground",
+            ? "text-slate-700 hover:bg-cat-deep/15 hover:text-cat-deep"
+            : "text-subtle-foreground hover:bg-slate-100 hover:text-foreground",
           open && "bg-cat-deep/15 text-cat-deep",
           disabled && "cursor-not-allowed opacity-50",
           className
@@ -270,7 +270,7 @@ export function TaskTimePopover({
             aria-label="标记时间段"
             data-task-time-popover
             style={{ left: layout.left, top: layout.top, width: layout.width }}
-            className="animate-fade-in fixed z-[200] rounded-xl border border-white/12 bg-elevated p-3 shadow-[0_24px_55px_-16px_rgba(0,0,0,0.92)] ring-1 ring-black/40"
+            className="animate-fade-in fixed z-[200] rounded-xl border border-slate-200 bg-elevated p-3 shadow-xl ring-1 ring-slate-900/5"
           >
             <div className="flex items-center justify-between gap-2 pb-2.5">
               <p className="text-xs font-medium text-foreground">标记时间段</p>
@@ -281,7 +281,7 @@ export function TaskTimePopover({
                   triggerRef.current?.focus();
                 }}
                 aria-label="关闭"
-                className="flex size-5 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+                className="flex size-5 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
               >
                 <X className="size-3" />
               </button>
@@ -324,7 +324,7 @@ export function TaskTimePopover({
                   setDraftMinute(String(Math.floor(now.getMinutes() / 5) * 5));
                   setHasStart(true);
                 }}
-                className="shrink-0 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1.5 text-[10px] text-muted-foreground transition-colors hover:border-cat-deep/35 hover:text-cat-deep"
+                className="shrink-0 rounded-lg border border-slate-200 bg-slate-100/70 px-2 py-1.5 text-[10px] text-muted-foreground transition-colors hover:border-cat-deep/35 hover:text-cat-deep"
               >
                 现在
               </button>
@@ -349,7 +349,7 @@ export function TaskTimePopover({
             </div>
 
             {/* 预览 + 操作 */}
-            <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/[0.07] pt-2.5">
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
               <span
                 data-time-preview
                 className="min-w-0 flex-1 truncate font-mono text-[10px] tabular-nums text-subtle-foreground"
@@ -362,7 +362,7 @@ export function TaskTimePopover({
                 <button
                   type="button"
                   onClick={clear}
-                  className="rounded-md px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+                  className="rounded-md px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
                 >
                   清除
                 </button>

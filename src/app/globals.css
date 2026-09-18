@@ -2,31 +2,31 @@
 
 /* ============================================================
    FlowMirror · 掌控时间黑洞 — Design Tokens (Tailwind v4)
-   Linear / Raycast 风格：极暗背景 + 毛玻璃 + 微弱发光边框
+   高级亮色系：柔和冷米白底 + 纯白卡片 + 晨曦青/冰青主色
    ============================================================ */
 
 @theme {
-  /* 基础语义色 —— 深空蓝黑夜色（非纯黑） */
-  --color-background: #0b0e14;
-  --color-surface: #10141d;
-  --color-elevated: #181d2a;
-  --color-foreground: #f4f5f8;
-  --color-muted-foreground: #9aa0b0;
-  --color-subtle-foreground: #626a7d;
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-strong: rgba(255, 255, 255, 0.13);
-  --color-input: rgba(255, 255, 255, 0.1);
-  --color-ring: rgba(103, 232, 249, 0.4);
+  /* 基础语义色 —— 柔和冷米白 / 极浅冷灰 */
+  --color-background: #f8fafc;
+  --color-surface: #ffffff;
+  --color-elevated: #ffffff;
+  --color-foreground: #0f172a;
+  --color-muted-foreground: #64748b;
+  --color-subtle-foreground: #94a3b8;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-input: #e2e8f0;
+  --color-ring: rgba(6, 182, 212, 0.35);
 
-  --color-primary: #f4f4f5;
-  --color-primary-foreground: #09090b;
+  --color-primary: #0d9488;
+  --color-primary-foreground: #ffffff;
 
-  /* 四大时间板块配色（数据可视化语义色） */
-  --color-cat-deep: #67e8f9;       /* 深度工作 — 冰青 */
-  --color-cat-chore: #a5b4fc;      /* 日常杂务 — 靛蓝 */
-  --color-cat-blackhole: #fb7185;  /* 娱乐黑洞 — 警示玫瑰 */
-  --color-cat-rest: #6ee7b7;       /* 休息恢复 — 翡翠 */
-  --color-candle: #fbbf24;         /* 深夜烛光 — 琥珀 */
+  /* 四大时间板块配色（数据可视化语义色，亮色加深版） */
+  --color-cat-deep: #0d9488;      /* 紧急重要 — 晨曦青 */
+  --color-cat-chore: #6366f1;     /* 日常工作 — 靛蓝 */
+  --color-cat-blackhole: #e11d48; /* 娱乐黑洞 — 警示玫瑰 */
+  --color-cat-rest: #059669;      /* 待执行清单 — 翡翠 */
+  --color-candle: #d97706;        /* 深夜烛光 — 琥珀 */
 
   /* PWA / iOS 安全区令牌 —— 全局可引用 */
   --safe-top: env(safe-area-inset-top, 0px);
@@ -50,7 +50,7 @@
 /* ---------------- 基础 ---------------- */
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
   scroll-behavior: smooth;
 }
 
@@ -64,8 +64,8 @@ body {
 }
 
 ::selection {
-  background: rgba(103, 232, 249, 0.25);
-  color: #fff;
+  background: rgba(6, 182, 212, 0.18);
+  color: #0f172a;
 }
 
 /* 极简滚动条 */
@@ -77,11 +77,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(100, 116, 139, 0.25);
   border-radius: 99px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(100, 116, 139, 0.4);
 }
 
 /* ---------------- 氛围背景 ---------------- */
@@ -100,68 +100,68 @@ body {
   pointer-events: none;
   background:
     /* 顶部环境光源：大半径微弱冷色渐变光晕 */
-    radial-gradient(1000px circle at 50% -20%, rgba(56, 189, 248, 0.08), rgba(99, 102, 241, 0.05) 40%, transparent 80%),
-    /* 底部极淡冷反光，避免死黑 */
-    radial-gradient(900px circle at 50% 118%, rgba(30, 41, 82, 0.18), transparent 70%);
+    radial-gradient(1000px circle at 50% -20%, rgba(6, 182, 212, 0.06), rgba(13, 148, 136, 0.04) 40%, transparent 80%),
+    /* 底部极淡冷反光 */
+    radial-gradient(900px circle at 50% 118%, rgba(99, 102, 241, 0.05), transparent 70%);
 }
 .atmosphere::after {
-  /* 细腻噪点，消除纯色塑料感 */
+  /* 细腻噪点，消除纯色塑料感（亮色下极淡） */
   content: "";
   position: absolute;
   inset: 0;
-  opacity: 0.5;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  opacity: 0.4;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.02'/%3E%3C/svg%3E");
 }
 
-/* 深夜烛光模式（23:00 - 01:00 自动开启） */
+/* 深夜烛光模式（23:00 - 01:00 自动开启，亮色版：暖金微光） */
 .candle-mode .atmosphere::before {
   background:
-    radial-gradient(56rem 34rem at 50% -10%, rgba(251, 191, 36, 0.1), transparent 62%),
-    radial-gradient(64rem 46rem at 50% 120%, rgba(120, 72, 20, 0.22), transparent 66%);
+    radial-gradient(56rem 34rem at 50% -10%, rgba(217, 119, 6, 0.1), transparent 62%),
+    radial-gradient(64rem 46rem at 50% 120%, rgba(180, 83, 9, 0.12), transparent 66%);
 }
 .candle-mode {
-  --color-ring: rgba(251, 191, 36, 0.4);
+  --color-ring: rgba(217, 119, 6, 0.4);
 }
 
-/* ---------------- 毛玻璃组件层 ---------------- */
+/* ---------------- 卡片组件层 ---------------- */
 
 @layer components {
-  /* 标准透光毛玻璃卡片：#131722/60 + blur-xl + white/8 微边框 + 统一柔影（悬浮半通透） */
+  /* 标准纯白卡片：#FFFFFF + 极浅边框 + 精致轻量阴影（shadow-sm） */
   .glass {
-    background: rgba(19, 23, 34, 0.6);
-    backdrop-filter: blur(24px) saturate(1.4);
-    -webkit-backdrop-filter: blur(24px) saturate(1.4);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.04),
+      0 1px 3px rgba(15, 23, 42, 0.06);
     transition:
       background-color 0.2s ease,
       border-color 0.2s ease,
       box-shadow 0.2s ease;
   }
   .glass:hover {
-    border-color: rgba(255, 255, 255, 0.16);
-    background: rgba(22, 27, 40, 0.8);
+    border-color: #cbd5e1;
+    box-shadow:
+      0 2px 4px rgba(15, 23, 42, 0.04),
+      0 4px 12px rgba(15, 23, 42, 0.07);
   }
 
-  /* 更强磨砂（浮层 / 命令栏 / 抽屉）：高不透明，内容不可穿透 */
+  /* 更强卡片（浮层 / 命令栏 / 抽屉）：纯白 + 更强阴影 */
   .glass-strong {
-    background: rgba(19, 23, 34, 0.92);
-    backdrop-filter: blur(28px) saturate(1.5);
-    -webkit-backdrop-filter: blur(28px) saturate(1.5);
-    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
     box-shadow:
-      0 8px 32px rgba(0, 0, 0, 0.5),
-      0 2px 8px rgba(0, 0, 0, 0.3);
+      0 8px 24px rgba(15, 23, 42, 0.1),
+      0 2px 6px rgba(15, 23, 42, 0.06);
     transition:
       background-color 0.2s ease,
       border-color 0.2s ease,
       box-shadow 0.2s ease;
   }
   .glass-strong:hover {
-    border-color: rgba(255, 255, 255, 0.14);
+    border-color: #cbd5e1;
   }
 
-  /* 微弱发光边框（悬停 / 聚焦时） */
+  /* 微弱描边（悬停 / 聚焦时） */
   .glow-edge {
     transition:
       border-color 0.35s var(--ease-spring),
@@ -169,76 +169,72 @@ body {
       transform 0.35s var(--ease-spring);
   }
   .glow-edge:hover {
-    border-color: rgba(255, 255, 255, 0.14);
+    border-color: #cbd5e1;
     box-shadow:
-      inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
-      0 0 0 1px rgba(255, 255, 255, 0.04),
-      0 16px 48px -18px rgba(0, 0, 0, 0.7);
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.8),
+      0 0 0 1px rgba(100, 116, 139, 0.08),
+      0 12px 32px -16px rgba(15, 23, 42, 0.16);
   }
 
-  /* 板块色发光描边 */
+  /* 板块色发光描边（亮色版：柔和色晕） */
   .glow-deep {
-      box-shadow: 0 0 24px -6px rgba(103, 232, 249, 0.35), inset 0 1px 0 0 rgba(255,255,255,0.06);
+      box-shadow: 0 0 0 1px rgba(13, 148, 136, 0.12), 0 8px 24px -12px rgba(13, 148, 136, 0.35), inset 0 1px 0 0 rgba(255,255,255,0.7);
   }
   .glow-blackhole {
-      box-shadow: 0 0 24px -6px rgba(251, 113, 133, 0.4), inset 0 1px 0 0 rgba(255,255,255,0.06);
+      box-shadow: 0 0 0 1px rgba(225, 29, 72, 0.14), 0 8px 24px -12px rgba(225, 29, 72, 0.35), inset 0 1px 0 0 rgba(255,255,255,0.7);
   }
   .glow-candle {
-      box-shadow: 0 0 28px -6px rgba(251, 191, 36, 0.45), inset 0 1px 0 0 rgba(255,255,255,0.06);
+      box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.16), 0 8px 24px -12px rgba(217, 119, 6, 0.4), inset 0 1px 0 0 rgba(255,255,255,0.7);
   }
 
-  /* 昨日时间黑洞：统一透光磨砂底 + 深绯红冷光警示边框（警示但不刺眼） */
+  /* 昨日时间黑洞：纯白底 + 深绯红轻描边警示 */
   .hero-rose {
       position: relative;
-      border: 1px solid rgba(251, 113, 133, 0.28);
+      border: 1px solid rgba(225, 29, 72, 0.22);
       background:
-        linear-gradient(180deg, rgba(251, 113, 133, 0.08), rgba(251, 113, 133, 0.02)),
-        rgba(19, 23, 34, 0.6);
-      backdrop-filter: blur(24px) saturate(1.4);
-      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+        linear-gradient(180deg, rgba(225, 29, 72, 0.05), rgba(225, 29, 72, 0.01)),
+        #ffffff;
       box-shadow:
-        0 0 34px -14px rgba(251, 113, 133, 0.5),
-        0 4px 24px rgba(0, 0, 0, 0.4);
+        0 8px 24px -14px rgba(225, 29, 72, 0.4),
+        0 1px 3px rgba(15, 23, 42, 0.06);
       transition:
         box-shadow 0.35s var(--ease-spring),
         border-color 0.2s ease,
         background-color 0.2s ease;
   }
   .hero-rose:hover {
-      border-color: rgba(251, 113, 133, 0.42);
+      border-color: rgba(225, 29, 72, 0.35);
       background:
-        linear-gradient(180deg, rgba(251, 113, 133, 0.1), rgba(251, 113, 133, 0.03)),
-        rgba(22, 27, 40, 0.8);
+        linear-gradient(180deg, rgba(225, 29, 72, 0.07), rgba(225, 29, 72, 0.02)),
+        #ffffff;
       box-shadow:
-        0 0 44px -12px rgba(251, 113, 133, 0.6),
-        0 4px 24px rgba(0, 0, 0, 0.45);
+        0 12px 32px -12px rgba(225, 29, 72, 0.5),
+        0 1px 3px rgba(15, 23, 42, 0.06);
   }
 
-  /* 昨日记忆碎片：统一透光磨砂底 + 琥珀金→月光紫渐变描边（温润沉淀感） */
+  /* 昨日记忆碎片：纯白底 + 琥珀金→靛蓝渐变描边（温润沉淀感） */
   .hero-gold {
       position: relative;
       border: 1px solid transparent;
       background:
-        linear-gradient(180deg, rgba(251, 191, 36, 0.06), rgba(165, 180, 252, 0.03)),
-        linear-gradient(rgba(19, 23, 34, 0.6), rgba(19, 23, 34, 0.6)) padding-box,
-        linear-gradient(135deg, rgba(251, 191, 36, 0.45), rgba(165, 180, 252, 0.28) 58%, rgba(251, 113, 133, 0.18)) border-box;
-      backdrop-filter: blur(24px) saturate(1.4);
-      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+        linear-gradient(180deg, rgba(217, 119, 6, 0.04), rgba(99, 102, 241, 0.03)),
+        linear-gradient(#ffffff, #ffffff) padding-box,
+        linear-gradient(135deg, rgba(217, 119, 6, 0.45), rgba(99, 102, 241, 0.3) 58%, rgba(225, 29, 72, 0.2)) border-box;
       box-shadow:
-        0 0 34px -14px rgba(251, 191, 36, 0.4),
-        0 4px 24px rgba(0, 0, 0, 0.4);
+        0 8px 24px -14px rgba(217, 119, 6, 0.4),
+        0 1px 3px rgba(15, 23, 42, 0.06);
       transition:
         box-shadow 0.35s var(--ease-spring),
         background-color 0.2s ease;
   }
   .hero-gold:hover {
       background:
-        linear-gradient(180deg, rgba(251, 191, 36, 0.08), rgba(165, 180, 252, 0.04)),
-        linear-gradient(rgba(22, 27, 40, 0.8), rgba(22, 27, 40, 0.8)) padding-box,
-        linear-gradient(135deg, rgba(251, 191, 36, 0.55), rgba(165, 180, 252, 0.36) 58%, rgba(251, 113, 133, 0.24)) border-box;
+        linear-gradient(180deg, rgba(217, 119, 6, 0.06), rgba(99, 102, 241, 0.04)),
+        linear-gradient(#ffffff, #ffffff) padding-box,
+        linear-gradient(135deg, rgba(217, 119, 6, 0.55), rgba(99, 102, 241, 0.38) 58%, rgba(225, 29, 72, 0.26)) border-box;
       box-shadow:
-        0 0 46px -12px rgba(251, 191, 36, 0.5),
-        0 4px 24px rgba(0, 0, 0, 0.45);
+        0 12px 32px -12px rgba(217, 119, 6, 0.5),
+        0 1px 3px rgba(15, 23, 42, 0.06);
   }
 
   /* 键帽 */
@@ -250,9 +246,9 @@ body {
     height: 1.5rem;
     padding: 0 0.4rem;
     border-radius: 0.4rem;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid #cbd5e1;
     border-bottom-width: 2px;
-    background: rgba(255, 255, 255, 0.05);
+    background: #f1f5f9;
     font-family: var(--font-mono);
     font-size: 0.68rem;
     color: var(--color-muted-foreground);
@@ -286,8 +282,8 @@ body {
   50%      { opacity: 1; transform: scale(1.06); }
 }
 @keyframes pulse-dot {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.45); }
-  50%      { box-shadow: 0 0 0 6px rgba(251, 113, 133, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(225, 29, 72, 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(225, 29, 72, 0); }
 }
 @keyframes shimmer {
   from { background-position: -200% 0; }
@@ -303,9 +299,9 @@ body {
 .skeleton-line {
   background-image: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.04) 0%,
-    rgba(255, 255, 255, 0.11) 50%,
-    rgba(255, 255, 255, 0.04) 100%
+    #eef2f7 0%,
+    #e2e8f0 50%,
+    #eef2f7 100%
   );
   background-size: 200% 100%;
   animation: shimmer 1.8s ease-in-out infinite;
@@ -357,15 +353,13 @@ body {
   }
 }
 
-/* 当 PWA 以 standalone / fullscreen 启动时，强制深冷夜底色，
-   避免原生白底闪烁一帧 */
+/* 当 PWA 以 standalone / fullscreen 启动时，强制亮色底，避免原生深色闪烁一帧 */
 @media (display-mode: standalone), (display-mode: fullscreen) {
   html, body {
-    background-color: #0b0e14;
+    background-color: #f8fafc;
     overscroll-behavior-y: contain;
   }
-  /* standalone 模式下让 body 自身承载背景，避免 atmosphere 透出原生白 */
   html {
-    background-color: #0b0e14;
+    background-color: #f8fafc;
   }
 }

@@ -229,8 +229,8 @@ export function DarkSelect<T extends string>({
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={onTriggerKeyDown}
         className={cn(
-          "flex min-w-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1.5 text-left text-[11px] text-foreground outline-none transition-colors",
-          "hover:border-white/20 focus-visible:border-cat-deep/40 disabled:opacity-60",
+          "flex min-w-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-100/70 px-2 py-1.5 text-left text-[11px] text-foreground outline-none transition-colors",
+          "hover:border-slate-300 focus-visible:border-cat-deep/40 disabled:opacity-60",
           open && "border-cat-deep/40",
           className
         )}
@@ -260,7 +260,7 @@ export function DarkSelect<T extends string>({
               maxHeight: layout.maxHeight,
             }}
             // 实色暗底（不用半透明 + blur）：彻底杜绝任何底色透白的情况
-            className="animate-fade-in fixed z-[200] overflow-y-auto rounded-xl border border-white/12 bg-elevated p-1 shadow-[0_20px_45px_-14px_rgba(0,0,0,0.9)] ring-1 ring-black/40"
+            className="animate-fade-in fixed z-[200] overflow-y-auto rounded-xl border border-slate-200 bg-elevated p-1 shadow-xl ring-1 ring-slate-900/5"
           >
             {options.map((option, i) => {
               const isSelected = option.value === value;
@@ -277,7 +277,7 @@ export function DarkSelect<T extends string>({
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors",
                     isSelected ? "text-foreground" : "text-muted-foreground",
-                    isActive && "bg-white/[0.09]"
+                    isActive && "bg-slate-200"
                   )}
                 >
                   {option.dot && <span className={cn("size-2 shrink-0 rounded-full", option.dot)} />}

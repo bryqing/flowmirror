@@ -69,7 +69,7 @@ export function DeepDivePanel() {
               ? "opacity-0"
               : candleMode
                 ? "border-candle/25 bg-candle/10 text-candle hover:bg-candle/15"
-                : "border-white/10 bg-white/[0.04] text-muted-foreground hover:bg-white/[0.08]"
+                : "border-slate-200 bg-slate-50 text-muted-foreground hover:bg-slate-100"
           )}
         >
           <Moon className="size-3.5" />
@@ -101,7 +101,7 @@ export function DeepDivePanel() {
                     "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed",
                     m.role === "user"
                       ? "bg-cat-deep/15 text-cat-deep"
-                      : "bg-white/[0.05] text-muted-foreground"
+                      : "bg-slate-100/70 text-muted-foreground"
                   )}
                 >
                   {m.content}
@@ -111,7 +111,7 @@ export function DeepDivePanel() {
 
             {streaming && (
               <div className="flex justify-start">
-                <div className="max-w-[85%] rounded-2xl bg-white/[0.05] px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+                <div className="max-w-[85%] rounded-2xl bg-slate-100/70 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
                   {reply ? (
                     <>
                       {reply}
@@ -143,13 +143,13 @@ export function DeepDivePanel() {
                 if (e.key === "Enter") send();
               }}
               placeholder="说点什么…"
-              className="h-9 min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-foreground outline-none placeholder:text-subtle-foreground focus:border-candle/40"
+              className="h-9 min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-foreground outline-none placeholder:text-subtle-foreground focus:border-candle/40"
             />
             <Button
               size="sm"
               onClick={send}
               disabled={streaming || !input.trim()}
-              className="gap-1 bg-candle/90 text-background hover:bg-candle"
+              className="gap-1 bg-candle/90 text-white hover:bg-candle"
             >
               {streaming ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
             </Button>

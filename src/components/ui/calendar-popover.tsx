@@ -182,7 +182,7 @@ export function CalendarPopover({ value, onChange, today, label = "回看灵感"
         title="打开日历，回看任意历史日期"
         onClick={() => (open ? setOpen(false) : openPanel())}
         className={cn(
-          "flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1.5 text-[11px] text-muted-foreground transition-colors",
+          "flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-100/70 px-2 py-1.5 text-[11px] text-muted-foreground transition-colors",
           "hover:border-cat-deep/35 hover:bg-cat-deep/10 hover:text-cat-deep",
           open && "border-cat-deep/40 text-cat-deep",
           className
@@ -201,7 +201,7 @@ export function CalendarPopover({ value, onChange, today, label = "回看灵感"
             role="dialog"
             aria-label="选择日期"
             style={{ left: layout.left, top: layout.top, width: layout.width }}
-            className="animate-fade-in fixed z-[200] rounded-xl border border-white/12 bg-elevated p-2.5 shadow-[0_24px_55px_-16px_rgba(0,0,0,0.92)] ring-1 ring-black/40"
+            className="animate-fade-in fixed z-[200] rounded-xl border border-slate-200 bg-elevated p-2.5 shadow-xl ring-1 ring-slate-900/5"
           >
             {/* 月份切换 */}
             <div className="flex items-center justify-between gap-1 px-0.5 pb-2">
@@ -209,7 +209,7 @@ export function CalendarPopover({ value, onChange, today, label = "回看灵感"
                 type="button"
                 onClick={() => shiftMonth(-1)}
                 aria-label="上个月"
-                className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+                className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
               >
                 <ChevronLeft className="size-3.5" />
               </button>
@@ -220,7 +220,7 @@ export function CalendarPopover({ value, onChange, today, label = "回看灵感"
                 type="button"
                 onClick={() => shiftMonth(1)}
                 aria-label="下个月"
-                className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+                className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
               >
                 <ChevronRight className="size-3.5" />
               </button>
@@ -258,8 +258,8 @@ export function CalendarPopover({ value, onChange, today, label = "回看灵感"
                       isSelected
                         ? "bg-cat-deep/20 font-medium text-cat-deep ring-1 ring-cat-deep/45"
                         : isToday
-                          ? "text-foreground hover:bg-white/[0.08]"
-                          : "text-muted-foreground hover:bg-white/[0.08] hover:text-foreground"
+                          ? "text-foreground hover:bg-slate-100"
+                          : "text-muted-foreground hover:bg-slate-100 hover:text-foreground"
                     )}
                   >
                     {dayNum}
@@ -277,7 +277,7 @@ export function CalendarPopover({ value, onChange, today, label = "回看灵感"
             </div>
 
             {/* 回到今天 */}
-            <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/[0.07] px-0.5 pt-2">
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 px-0.5 pt-2">
               <span className="text-[10px] text-subtle-foreground">
                 {value === today ? "正在查看今天" : `已选 ${value}`}
               </span>

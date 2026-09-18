@@ -73,7 +73,7 @@ export function Sheet({ open, onClose, children, title }: SheetProps) {
     >
       {/* 背景遮罩：显式 z-10 */}
       <div
-        className="sheet-backdrop absolute inset-0 z-10 bg-black/60 backdrop-blur-sm"
+        className="sheet-backdrop absolute inset-0 z-10 bg-slate-900/40 backdrop-blur-sm"
         onClick={onClose}
       />
 
@@ -83,7 +83,7 @@ export function Sheet({ open, onClose, children, title }: SheetProps) {
           className="glass-strong max-h-[88vh] overflow-y-auto rounded-t-3xl border-b-0"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-white/15" />
+          <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-slate-200" />
           <SheetHeader onClose={onClose} title={title} />
           {children}
         </div>
@@ -117,7 +117,7 @@ function SheetHeader({ onClose, title }: { onClose: () => void; title?: string }
       <button
         onClick={onClose}
         aria-label="关闭"
-        className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground"
+        className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
       >
         <X className="size-4" />
       </button>

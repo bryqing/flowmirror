@@ -85,7 +85,7 @@ export function TimeHeatmap() {
                   }`}
                   className={cn(
                     "h-9 rounded-[5px] transition-transform duration-150 hover:scale-y-110 sm:h-11",
-                    h.category === null && "bg-white/[0.04]",
+                    h.category === null && "bg-slate-50",
                     h.category && h.intensity > 0 && CELL_COLOR[h.category][h.intensity - 1],
                     h.category === "blackhole" && h.intensity === 3 && "animate-pulse-dot"
                   )}
@@ -103,7 +103,7 @@ export function TimeHeatmap() {
 
           {/* 空态：说清"为什么是空的"以及怎么把它填满，而不是留一片灰 */}
           {!hasData && (
-            <div className="flex items-start gap-2.5 rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-3.5 py-3">
+            <div className="flex items-start gap-2.5 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3.5 py-3">
               <Clock3 className="mt-0.5 size-3.5 shrink-0 text-subtle-foreground" />
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 {tasks.length === 0
@@ -124,8 +124,8 @@ export function TimeHeatmap() {
                   data-stat-total={stat.totalMinutes}
                   className={cn(
                     "rounded-xl border p-3",
-                    stat.totalMinutes > 0 ? meta.border : "border-white/[0.07]",
-                    stat.totalMinutes > 0 ? meta.bg : "bg-white/[0.02]"
+                    stat.totalMinutes > 0 ? meta.border : "border-slate-100",
+                    stat.totalMinutes > 0 ? meta.bg : "bg-slate-50"
                   )}
                 >
                   <div className="flex items-baseline justify-between">

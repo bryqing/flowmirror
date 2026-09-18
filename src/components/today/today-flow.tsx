@@ -6,7 +6,6 @@ import { useFlow } from "@/components/flow-context";
 import { Button } from "@/components/ui/button";
 import { CommandBar } from "@/components/layout/command-bar";
 import { DateStrip } from "@/components/layout/date-strip";
-import { MorningAnchor } from "./morning-anchor";
 import { TaskQuadrants } from "./task-quadrants";
 import { GlobalDispatchPanel } from "./global-dispatch-panel";
 import { QuickCaptureSheet } from "./quick-capture-sheet";
@@ -59,7 +58,7 @@ export function TodayFlow() {
               历史回看 · <span className="font-mono">{selectedDate}</span>
             </p>
             <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-              四象限与灵感流均为该日数据；此时新增的任务会记在这一天。
+              当日四象限与时间分布均为该日数据；此时新增的任务会记在这一天。
             </p>
           </div>
           <Button
@@ -74,8 +73,7 @@ export function TodayFlow() {
         </div>
       )}
 
-      {/* 中间：晨间金句锚点小卡片 */}
-      <MorningAnchor />
+      {/* 中间：晨间金句锚点已上移到全局看板顶部，此处不再重复渲染 */}
 
       {/* 熔断关怀模式横幅 */}
       {careMode && (
@@ -95,8 +93,8 @@ export function TodayFlow() {
         </div>
       )}
 
-      {/* 核心：2x2 四象限紧凑网格大盘 */}
-      <TaskQuadrants />
+      {/* 核心：当日战局四象限网格大盘（仅 Q1/Q2/Q4） */}
+      <TaskQuadrants mode="battle" />
 
       {!careMode && (
         <p className="flex items-center justify-center gap-1.5 pt-0.5 text-center text-[11px] text-subtle-foreground">

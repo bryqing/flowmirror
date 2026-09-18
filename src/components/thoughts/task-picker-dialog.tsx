@@ -71,7 +71,7 @@ export function TaskPickerDialog({ open, title, onClose, onPick }: TaskPickerDia
     >
       {/* 遮罩 */}
       <div
-        className="sheet-backdrop absolute inset-0 z-10 bg-black/60 backdrop-blur-sm"
+        className="sheet-backdrop absolute inset-0 z-10 bg-slate-900/40 backdrop-blur-sm"
         onClick={onClose}
       />
 
@@ -91,7 +91,7 @@ export function TaskPickerDialog({ open, title, onClose, onPick }: TaskPickerDia
             <button
               onClick={onClose}
               aria-label="关闭"
-              className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground"
+              className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
             >
               <X className="size-4" />
             </button>
@@ -108,7 +108,7 @@ export function TaskPickerDialog({ open, title, onClose, onPick }: TaskPickerDia
                   onClick={() => onPick(q.key)}
                   className={cn(
                     "group flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all",
-                    "hover:bg-white/[0.05]",
+                    "hover:bg-slate-100",
                     meta.border,
                     meta.bg
                   )}

@@ -165,7 +165,7 @@ export function ReviewDrawer() {
 function Question({ index, text }: { index: string; text: string }) {
   return (
     <div className="flex items-baseline gap-2.5">
-      <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-cat-deep">
+      <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-cat-deep">
         {index}
       </span>
       <p className="text-sm font-medium leading-snug">{text}</p>
@@ -194,7 +194,7 @@ function TagCloud({
               variant="muted"
               className={cn(
                 "cursor-pointer border px-2.5 py-1 text-xs transition-all duration-200",
-                !active && "hover:border-white/20 hover:text-foreground",
+                !active && "hover:border-slate-300 hover:text-foreground",
                 active && tone === "danger" && "border-cat-blackhole/40 bg-cat-blackhole/15 text-cat-blackhole",
                 active && tone === "rest" && "border-cat-rest/40 bg-cat-rest/15 text-cat-rest"
               )}

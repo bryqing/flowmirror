@@ -5,7 +5,6 @@ import {
   Archive,
   Check,
   ChevronDown,
-  ChevronRight,
   Clock,
   Loader2,
   Pencil,
@@ -21,7 +20,7 @@ import { TaskTimePopover } from "@/components/ui/task-time-popover";
 import {
   CATEGORY_META,
   QUADRANT_META,
-  QUADRANT_ORDER,
+  type Quadrant,
   type Task,
   type TaskCategory,
 } from "@/lib/types";
@@ -35,22 +34,26 @@ import {
 import { cn, fmtDuration } from "@/lib/utils";
 
 /**
- * 四象限看板：
- *   · q1/q2/q4 按 selectedDate 切片 —— 「每日战局」；
- *   · q3「待执行清单」是**全局常驻池**（backlogTasks），不随日期切换而变化。
- * 顺序与文案统一由 QUADRANT_META 提供（q1 紧急重要 → q4 休闲娱乐），
- * 这里不本地维护任何象限名称，避免出现第二份文案源。
+ * 四象限看板（支持两种板块视图）：
+ *   · `mode="battle"`（今日战局）→ 只渲染 q1/q2/q4，按 selectedDate 切片；
+ *   · `mode="backlog"`（待执行清单）→ 只渲染 q3 全局常驻池，全量展示、脱离日期。
+ * 顺序与文案统一由 QUADRANT_META 提供，这里不本地维护任何象限名称，
+ * 避免出现第二份文案源。
  */
 
-/** 圆环进度圈配色（与分类令牌一致） */
+/** 圆环进度圈配色（与分类令牌一致，亮色加深版） */
 const RING_COLORS: Record<TaskCategory, string> = {
-  "deep-work": "#67e8f9",
-  chore: "#a5b4fc",
-  blackhole: "#fb7185",
-  rest: "#6ee7b7",
+  "deep-work": "#0d9488",
+  chore: "#6366f1",
+  blackhole: "#e11d48",
+  rest: "#059669",
 };
 
-export function TaskQuadrants() {
+/** 今日战局只保留三个「当日战局」象限（去掉 q3 待执行清单） */
+const BATTLE_QUADRANTS: Quadrant[] = ["q1", "q2", "q4"];
+
+export function TaskQuadrants({ mode = "battle" }: { mode?: "battle" | "backlog" }) {
+  const quadrants: Quadrant[] = mode === "backlog" ? ["q3"] : BATTLE_QUADRANTS;
   const {
     tasks,
     backlogTasks,
@@ -90,8 +93,8 @@ export function TaskQuadrants() {
   };
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {QUADRANT_ORDER.map((q, qi) => {
+    <div className={cn("grid gap-4", mode === "battle" && "sm:grid-cols-2")}>
+      {quadrants.map((q, qi) => {
         const { category, hint } = QUADRANT_META[q];
         const meta = CATEGORY_META[category];
         /**
@@ -117,7 +120,7 @@ export function TaskQuadrants() {
           <TaskChip
             key={task.id}
             task={task}
-            subtitle={isBacklog ? formatStamp(task.createdAt) : undefined}
+            subtitle={isBacklog ? formatStamp(task.createdAt, { full: true }) : undefined}
             onOpen={() => openDetail(task.id)}
             onComplete={() => completeTask(task.id)}
             onSetTime={(start, duration) => setTaskTime(task.id, start, duration)}
@@ -166,12 +169,12 @@ export function TaskQuadrants() {
               )}
               <span
                 data-pool-count
-                className="rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10px] text-zinc-400"
+                className="rounded-full bg-slate-100 px-1.5 py-px font-mono text-[10px] text-slate-500"
                 title={isBacklog ? `未完成 ${list.length} · 已完成 ${doneList.length}` : undefined}
               >
                 {mounted ? list.length : 0}
               </span>
-              <span className="ml-auto font-mono text-[10px] text-zinc-400">
+              <span className="ml-auto font-mono text-[10px] text-slate-500">
                 {mounted ? (total > 0 ? fmtDuration(total) : hint) : hint}
               </span>
               <button
@@ -183,7 +186,7 @@ export function TaskQuadrants() {
                   "flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
                   adding
                     ? cn(meta.border, meta.bg, meta.text)
-                    : "border-white/10 text-subtle-foreground hover:border-white/25 hover:text-foreground"
+                    : "border-slate-200 text-subtle-foreground hover:border-slate-300 hover:text-foreground"
                 )}
               >
                 <Plus
@@ -201,12 +204,12 @@ export function TaskQuadrants() {
             {/* 任务芯片：条目间 space-y-2.5 呼吸间距 */}
             <div className="flex flex-1 flex-col gap-2.5">
               {!mounted && (
-                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] py-6 text-[11px] text-zinc-500">
+                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-100 py-6 text-[11px] text-slate-400">
                   …
                 </p>
               )}
               {mounted && list.length === 0 && (
-                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] px-3 py-6 text-center text-[11px] text-zinc-500">
+                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-100 px-3 py-6 text-center text-[11px] text-slate-400">
                   {isBacklog ? "池子还空着 · 把「以后再说」的事丢进来" : "暂无安排"}
                 </p>
               )}
@@ -220,7 +223,7 @@ export function TaskQuadrants() {
                     onClick={() => setShowArchived((v) => !v)}
                     aria-expanded={showArchived}
                     aria-label={`已完成 ${doneList.length} 项`}
-                    className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-subtle-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
+                    className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-subtle-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
                   >
                     <Archive className="size-3 shrink-0" />
                     已完成 {doneList.length} 项
@@ -301,7 +304,7 @@ function AddTaskRow({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-xl border bg-white/[0.04] px-2 py-1.5",
+        "flex shrink-0 items-center gap-1.5 rounded-xl border bg-slate-50 px-2 py-1.5",
         accentBorder
       )}
     >
@@ -336,7 +339,7 @@ function AddTaskRow({
         onClick={onCancel}
         aria-label="取消添加"
         title="取消（ESC）"
-        className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+        className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
       >
         <X className="size-3.5" />
       </button>
@@ -365,7 +368,7 @@ function RingProgress({
       title={`完成进度 ${done}/${total} · ${Math.round(pct * 100)}%`}
     >
       <svg width="36" height="36" viewBox="0 0 36 36" className="-rotate-90">
-        <circle cx="18" cy="18" r={r} fill="none" stroke="rgba(255,255,255,0.09)" strokeWidth="3" />
+        <circle cx="18" cy="18" r={r} fill="none" stroke="rgba(15,23,42,0.1)" strokeWidth="3" />
         <circle
           cx="18"
           cy="18"
@@ -381,7 +384,7 @@ function RingProgress({
           }}
         />
       </svg>
-      <span className="absolute font-mono text-[9px] font-medium tabular-nums text-zinc-300">
+      <span className="absolute font-mono text-[9px] font-medium tabular-nums text-slate-700">
         {total === 0 ? "—" : `${Math.round(pct * 100)}%`}
       </span>
     </span>
@@ -469,9 +472,9 @@ function TaskChip({
 
   if (confirming) {
     return (
-      <div className="-mx-2 flex items-center gap-2 rounded-lg border border-cat-blackhole/30 bg-cat-blackhole/[0.08] px-2 py-2.5">
+      <div className="flex items-center gap-2 rounded-xl border border-cat-blackhole/30 bg-cat-blackhole/[0.06] px-3 py-2.5">
         <Trash2 className="size-3.5 shrink-0 text-cat-blackhole" />
-        <span className="min-w-0 flex-1 truncate text-[11px] text-cat-blackhole/90">
+        <span className="min-w-0 flex-1 break-words text-[11px] leading-snug text-cat-blackhole/90">
           删除「{task.title}」？
         </span>
         <button
@@ -482,7 +485,7 @@ function TaskChip({
         </button>
         <button
           onClick={() => setConfirming(false)}
-          className="shrink-0 rounded-md px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground"
+          className="shrink-0 rounded-md px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
         >
           取消
         </button>
@@ -507,15 +510,17 @@ function TaskChip({
         onOpen();
       }}
       className={cn(
+        // 独立卡片容器：每条任务自成一张卡（浅边框 + 微阴影），不再挤在大框内。
         // 外层竖排：主行 + 可选副标题行。副标题缺席时与原来的「单行 flex」等价。
-        "group -mx-2 flex cursor-pointer flex-col rounded-lg border border-transparent px-2 py-2.5 transition-colors duration-200",
-        "hover:bg-white/[0.04]",
+        "group flex cursor-pointer flex-col rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition-all duration-200",
+        "hover:border-slate-300 hover:shadow-md",
         frozen && "opacity-45 saturate-50",
         done && "opacity-60",
-        running && isBlackhole && "bg-cat-blackhole/[0.08] hover:bg-cat-blackhole/[0.12]",
-        running && !isBlackhole && "bg-cat-deep/[0.07] hover:bg-cat-deep/[0.11]"
+        running && isBlackhole && "border-cat-blackhole/30 bg-cat-blackhole/[0.06]",
+        running && !isBlackhole && "border-cat-deep/30 bg-cat-deep/[0.05]"
       )}
     >
+      {/* 主行：打钩 + 标题（break-words 自动折行）+ 右侧操作组（贴右对齐，不与长文本抢宽度） */}
       <div className="flex items-center gap-2">
       {/* 快速打钩（不打开抽屉） */}
       <button
@@ -528,23 +533,13 @@ function TaskChip({
         className={cn(
           "flex size-4 shrink-0 items-center justify-center rounded-full border transition-all",
           done
-            ? "border-cat-rest bg-cat-rest text-background"
-            : "border-white/25 text-transparent hover:border-cat-rest hover:text-cat-rest/60",
+            ? "border-cat-rest bg-cat-rest text-white"
+            : "border-slate-300 text-transparent hover:border-cat-rest hover:text-cat-rest/60",
           frozen && "cursor-not-allowed"
         )}
       >
         <Check className="size-2.5" strokeWidth={3.5} />
       </button>
-
-      {/* 时间段入口：既显示窗口，也是热力大盘的数据来源（点击可改） */}
-      <TaskTimePopover
-        value={task.scheduledTime}
-        duration={task.plannedDuration}
-        label={windowLabel(task)}
-        onChange={onSetTime}
-        disabled={frozen}
-        className={done ? "line-through opacity-70" : undefined}
-      />
 
       {editing ? (
         <input
@@ -567,7 +562,7 @@ function TaskChip({
             }
           }}
           onBlur={() => finishEdit(true)}
-          className="min-w-0 flex-1 rounded-md border border-cat-deep/45 bg-white/[0.07] px-1.5 py-0.5 text-xs text-foreground outline-none ring-2 ring-cat-deep/15 placeholder:text-subtle-foreground"
+          className="min-w-0 flex-1 rounded-md border border-cat-deep/45 bg-slate-100 px-1.5 py-0.5 text-xs text-foreground outline-none ring-2 ring-cat-deep/15 placeholder:text-subtle-foreground"
         />
       ) : (
         <span
@@ -578,8 +573,9 @@ function TaskChip({
           }}
           title={frozen ? undefined : "点击修改标题"}
           className={cn(
-            "min-w-0 flex-1 truncate text-xs",
-            done ? "text-zinc-500 line-through" : "font-medium text-zinc-100",
+            // 禁单行截断：break-words + 自适应高度，短文本单行、长文本自动撑高折行
+            "min-w-0 flex-1 break-words text-xs leading-snug",
+            done ? "text-slate-400 line-through" : "font-medium text-slate-900",
             !frozen && "cursor-text"
           )}
         >
@@ -587,91 +583,105 @@ function TaskChip({
         </span>
       )}
 
-      {/* 编辑入口。标题本身也可点，这里只是让「可编辑」这件事看得见 */}
-      {!editing && !frozen && (
+      {/* 右侧操作区：编辑 / 计时 / 删除，弹性贴右；多行标题时垂直居中 */}
+      <div className="flex shrink-0 items-center gap-0.5">
+        {/* 编辑入口。标题本身也可点，这里只是让「可编辑」这件事看得见 */}
+        {!editing && !frozen && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              beginEdit();
+            }}
+            aria-label={`编辑任务「${task.title}」`}
+            title="编辑标题"
+            className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-deep/15 hover:text-cat-deep"
+          >
+            <Pencil className="size-3.5" />
+          </button>
+        )}
+
+        {/* 轻量计时：开始 / 结束，结束时累计进 actualDuration 并驱动热力大盘 */}
         <button
           onClick={(e) => {
             e.stopPropagation();
-            beginEdit();
+            onToggleTiming();
           }}
-          aria-label={`编辑任务「${task.title}」`}
-          title="编辑标题"
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-deep/15 hover:text-cat-deep"
-        >
-          <Pencil className="size-3.5" />
-        </button>
-      )}
-
-      {/* 轻量计时：开始 / 结束，结束时累计进 actualDuration 并驱动热力大盘 */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleTiming();
-        }}
-        disabled={frozen || done}
-        aria-label={timing ? `结束计时「${task.title}」` : `开始计时「${task.title}」`}
-        title={timing ? "结束计时" : "开始计时"}
-        className={cn(
-          "flex size-5 shrink-0 items-center justify-center rounded-md transition-colors",
-          timing
-            ? "bg-cat-deep/20 text-cat-deep hover:bg-cat-deep/30"
-            : "text-subtle-foreground/70 hover:bg-cat-deep/15 hover:text-cat-deep",
-          (frozen || done) && "cursor-not-allowed opacity-40"
-        )}
-      >
-        {timing ? <Square className="size-3 fill-current" /> : <Play className="size-3.5" />}
-      </button>
-
-      {frozen && <Snowflake className="size-3 shrink-0 text-cat-chore" />}
-
-      {/* 暂停/进行中标识 */}
-      {running && !timing && !isBlackhole && <Play className="size-3 shrink-0 text-cat-deep" />}
-      {timing && (
-        <span
+          disabled={frozen || done}
+          aria-label={timing ? `结束计时「${task.title}」` : `开始计时「${task.title}」`}
+          title={timing ? "结束计时" : "开始计时"}
           className={cn(
-            "flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums",
-            isBlackhole ? "text-cat-blackhole" : "text-cat-deep"
+            "flex size-5 shrink-0 items-center justify-center rounded-md transition-colors",
+            timing
+              ? "bg-cat-deep/20 text-cat-deep hover:bg-cat-deep/30"
+              : "text-subtle-foreground/70 hover:bg-cat-deep/15 hover:text-cat-deep",
+            (frozen || done) && "cursor-not-allowed opacity-40"
           )}
-          title={`自 ${timingSince} 起计时中`}
         >
+          {timing ? <Square className="size-3 fill-current" /> : <Play className="size-3.5" />}
+        </button>
+
+        {/* 删除入口：常显（移动端无悬浮态，靠 hover 才出现等于不可用） */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirming(true);
+          }}
+          aria-label={`删除任务「${task.title}」`}
+          title="删除任务"
+          className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-blackhole/15 hover:text-cat-blackhole"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
+      </div>
+
+      {/* 元信息行：时间段 + 状态标识（可换行，不挤占标题折行宽度） */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 pl-6">
+        {/* 时间段入口：既显示窗口，也是热力大盘的数据来源（点击可改） */}
+        <TaskTimePopover
+          value={task.scheduledTime}
+          duration={task.plannedDuration}
+          label={windowLabel(task)}
+          onChange={onSetTime}
+          disabled={frozen}
+          className={done ? "line-through opacity-70" : undefined}
+        />
+
+        {frozen && <Snowflake className="size-3 shrink-0 text-cat-chore" />}
+
+        {/* 暂停/进行中标识 */}
+        {running && !timing && !isBlackhole && <Play className="size-3 shrink-0 text-cat-deep" />}
+        {timing && (
           <span
             className={cn(
-              "size-1.5 animate-pulse-dot rounded-full",
-              isBlackhole ? "bg-cat-blackhole" : "bg-cat-deep"
+              "flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums",
+              isBlackhole ? "text-cat-blackhole" : "text-cat-deep"
             )}
-          />
-          计时{timingSince ? ` ${timingSince}` : "中"}
-        </span>
-      )}
+            title={`自 ${timingSince} 起计时中`}
+          >
+            <span
+              className={cn(
+                "size-1.5 animate-pulse-dot rounded-full",
+                isBlackhole ? "bg-cat-blackhole" : "bg-cat-deep"
+              )}
+            />
+            计时{timingSince ? ` ${timingSince}` : "中"}
+          </span>
+        )}
 
-      {/* 已记录时长（非计时状态下展示真实累计） */}
-      {!timing && recorded > 0 && (
-        <span
-          className="shrink-0 rounded bg-white/[0.06] px-1 py-px font-mono text-[9px] tabular-nums text-zinc-400"
-          title={`已记录 ${fmtDuration(recorded)}`}
-        >
-          已记{fmtDuration(recorded)}
-        </span>
-      )}
+        {/* 已记录时长（非计时状态下展示真实累计） */}
+        {!timing && recorded > 0 && (
+          <span
+            className="shrink-0 rounded bg-slate-100 px-1 py-px font-mono text-[9px] tabular-nums text-slate-500"
+            title={`已记录 ${fmtDuration(recorded)}`}
+          >
+            已记{fmtDuration(recorded)}
+          </span>
+        )}
 
-      {done && task.microReviews.length > 0 && (
-        <span className="shrink-0 rounded bg-cat-rest/15 px-1 py-px text-[9px] text-cat-rest">已复盘</span>
-      )}
-
-      {/* 删除入口：常显（移动端无悬浮态，靠 hover 才出现等于不可用） */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setConfirming(true);
-        }}
-        aria-label={`删除任务「${task.title}」`}
-        title="删除任务"
-        className="flex size-5 shrink-0 items-center justify-center rounded-md text-subtle-foreground/70 transition-colors hover:bg-cat-blackhole/15 hover:text-cat-blackhole"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
-
-      <ChevronRight className="size-3.5 shrink-0 text-subtle-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        {done && task.microReviews.length > 0 && (
+          <span className="shrink-0 rounded bg-cat-rest/15 px-1 py-px text-[9px] text-cat-rest">已复盘</span>
+        )}
       </div>
 
       {/* 副标题：待执行池用来显示这条是什么时候记下来的，方便追溯录入时间 */}

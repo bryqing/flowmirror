@@ -104,7 +104,7 @@ export function BlackholeDetailDrawer({
               {Math.floor(mirror.blackholeMinutes / 60)} 小时{" "}
               {mirror.blackholeMinutes % 60 > 0 ? `${mirror.blackholeMinutes % 60} 分` : ""}
             </p>
-            <p className="mt-0.5 text-[11px] text-zinc-400">
+            <p className="mt-0.5 text-[11px] text-slate-500">
               {mirror.dateLabel} · 共 {slices.length} 段，失控{" "}
               {slices.filter((s) => s.runaway).length} 段
             </p>
@@ -134,7 +134,7 @@ export function BlackholeDetailDrawer({
             </Button>
           </div>
           {reply ? (
-            <p className="whitespace-pre-line text-xs leading-relaxed text-zinc-300">{reply}</p>
+            <p className="whitespace-pre-line text-xs leading-relaxed text-slate-700">{reply}</p>
           ) : error ? (
             <p className="text-[11px] leading-relaxed text-cat-blackhole/80">{error}</p>
           ) : (
@@ -146,12 +146,12 @@ export function BlackholeDetailDrawer({
 
         {/* 失控时段明细 */}
         <div className="flex flex-col gap-2.5">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-slate-800">
             <Timer className="size-3.5 text-cat-blackhole" />
             时段明细 · 逐段溯源
           </p>
           {slices.length === 0 && (
-            <p className="rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-3.5 py-3 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3.5 py-3 text-[11px] leading-relaxed text-muted-foreground">
               昨日没有休闲娱乐时段记录 —— 没有失控段可溯源。若你确实刷了视频/打了游戏，去任务卡片上标个时间段或按 ▶ 计时，明天这里就有数据了。
             </p>
           )}
@@ -167,7 +167,7 @@ export function BlackholeDetailDrawer({
                   "flex flex-col gap-2 rounded-xl border p-3.5 transition-colors",
                   s.runaway
                     ? "border-cat-blackhole/25 bg-cat-blackhole/[0.06]"
-                    : "border-white/[0.07] bg-white/[0.02]",
+                    : "border-slate-100 bg-slate-50",
                   focused && "ring-2 ring-cat-blackhole/40"
                 )}
               >
@@ -176,7 +176,7 @@ export function BlackholeDetailDrawer({
                     {s.start}–{s.end}
                   </span>
                   {mins != null && (
-                    <span className="flex items-center gap-1 rounded bg-white/[0.06] px-1.5 py-px text-[10px] text-zinc-400">
+                    <span className="flex items-center gap-1 rounded bg-slate-100 px-1.5 py-px text-[10px] text-slate-500">
                       <Clock className="size-2.5" />
                       {mins} 分钟
                     </span>
@@ -187,17 +187,17 @@ export function BlackholeDetailDrawer({
                     </span>
                   )}
                 </div>
-                <p className={cn("text-xs", s.runaway ? "text-cat-blackhole" : "text-zinc-200")}>
+                <p className={cn("text-xs", s.runaway ? "text-cat-blackhole" : "text-slate-800")}>
                   {s.label}
                 </p>
                 {lessons.length > 0 && (
-                  <div className="flex flex-col gap-1 border-t border-white/[0.06] pt-2">
+                  <div className="flex flex-col gap-1 border-t border-slate-100 pt-2">
                     <p className="flex items-center gap-1 text-[10px] text-candle">
                       <Lightbulb className="size-2.5" />
                       已沉淀的避坑教训
                     </p>
                     {lessons.map((l, li) => (
-                      <p key={li} className="text-[10px] leading-relaxed text-zinc-400">
+                      <p key={li} className="text-[10px] leading-relaxed text-slate-500">
                         · {l.text}
                       </p>
                     ))}
@@ -212,7 +212,7 @@ export function BlackholeDetailDrawer({
         {mirror.blackholeComment && (
           <div className="flex items-start gap-2 rounded-xl border border-cat-blackhole/20 bg-cat-blackhole/[0.05] p-3.5">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-cat-blackhole/90" />
-            <p className="text-[11px] leading-relaxed text-zinc-300">{mirror.blackholeComment}</p>
+            <p className="text-[11px] leading-relaxed text-slate-700">{mirror.blackholeComment}</p>
           </div>
         )}
       </div>

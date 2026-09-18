@@ -64,7 +64,7 @@ export function SyncStatus() {
           "border backdrop-blur-md transition-colors",
           synced
             ? "border-cat-rest/25 bg-cat-rest/10 text-cat-rest"
-            : "border-white/10 bg-white/[0.04] text-subtle-foreground hover:text-foreground"
+            : "border-slate-200 bg-slate-50 text-subtle-foreground hover:text-foreground"
         )}
       >
         {synced ? <Cloud className="size-3.5" /> : <CloudOff className="size-3.5" />}
@@ -107,7 +107,7 @@ export function SyncStatus() {
               </p>
 
               {/* 登录 / 注册 切换 */}
-              <div className="flex rounded-xl border border-white/10 bg-white/[0.03] p-1">
+              <div className="flex rounded-xl border border-slate-200 bg-slate-50 p-1">
                 {(
                   [
                     { key: "signin" as Mode, label: "登录", icon: LogIn },
@@ -121,7 +121,7 @@ export function SyncStatus() {
                     className={cn(
                       "flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium transition-colors",
                       mode === key
-                        ? "bg-cat-deep/90 text-background"
+                        ? "bg-cat-deep/90 text-white"
                         : "text-subtle-foreground hover:text-foreground"
                     )}
                   >
@@ -173,7 +173,7 @@ export function SyncStatus() {
               <Button
                 onClick={submit}
                 disabled={!canSubmit}
-                className="bg-cat-deep/90 text-background hover:bg-cat-deep"
+                className="bg-cat-deep/90 text-white hover:bg-cat-deep"
               >
                 {busy ? (
                   <Loader2 className="mr-1.5 size-3.5 animate-spin" />

@@ -95,7 +95,7 @@ export function DateStrip() {
           "flex shrink-0 flex-col items-center rounded-xl px-3 py-1.5 transition-all duration-200",
           active
             ? "bg-cat-deep/15 border border-cat-deep/35 shadow-[0_0_18px_-6px_rgba(103,232,249,0.5)]"
-            : "border border-transparent hover:bg-white/[0.05]"
+            : "border border-transparent hover:bg-slate-100"
         )}
       >
         <span className={cn("text-[10px]", active ? "text-cat-deep" : "text-subtle-foreground")}>
@@ -163,7 +163,7 @@ export function DateStrip() {
         <p className="flex flex-wrap items-center gap-1.5 rounded-lg border border-candle/25 bg-candle/[0.07] px-2.5 py-1.5 text-[11px] text-candle/90">
           <span className="size-1.5 shrink-0 rounded-full bg-candle" />
           正在回看 <span className="font-mono">{selectedDate}</span>
-          的任务与灵感 · 新增的内容会记在这一天
+          的战局 · 新增的任务会记在这一天
         </p>
       )}
     </div>
