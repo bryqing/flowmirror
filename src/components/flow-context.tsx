@@ -122,6 +122,23 @@ interface FlowContextValue {
    */
   renameTask: (id: string, title: string) => void;
   completeTask: (id: string) => void;
+  /**
+   * **撤回完成**（反悔）：把 `done` 打回 `pending`，任务重新变成可计时、可打卡的活任务。
+   *
+   * 只做「状态回退」，不动时间切片 / 微复盘 —— 已记录的真实耗时和已沉淀的经验
+   * 是资产，撤回一次「手滑打钩」不该把它们一并抹掉。
+   * 归位由 `category` 决定：`rest` 回全局待执行池，其余回当日看板（由 commitTask 路由）。
+   */
+  reopenTask: (id: string) => void;
+  /**
+   * **象限自由转移**：任意象限之间互转（q1↔q2↔q3↔q4）。
+   *
+   * 本质是一次**跨池搬迁**：`rest` 与非 `rest` 分属两个互斥的池，
+   * `commitTask` 会按新 category 把任务写进目标池、并从原池里摘掉，
+   * 所以 Q3 → Q1/Q2/Q4（移入今日战局）与 Q1/Q2/Q4 → Q3（移出到待办池）
+   * 是同一套逻辑，不需要两条路径。
+   */
+  moveTaskQuadrant: (id: string, quadrant: Quadrant) => void;
   closeReview: () => void;
   submitReview: (id: string, review: Omit<MicroReview, "id" | "createdAt">) => void;
   executeCommand: (cmd: ParsedCommand) => void;
@@ -690,7 +707,21 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         return next;
       });
       setTasks((prev) => {
-        const next = prev.map((t) => (t.id === updated.id ? updated : t)).sort(byScheduledTime);
+        /**
+         * ⚠️ 必须「有则改、无则加」，**不能只 `map`**。
+         *
+         * `map` 只改动已存在的条目 —— 对改名 / 计时这类池内更新是对的，但对
+         * **跨池搬迁**（Q3 待执行清单 → Q1/Q2/Q4）就是致命的：此时任务还在
+         * 待执行池里、日池根本没有它，`map` 会静默丢弃，于是两个池都没了这条任务，
+         * 详情抽屉因 `findTask` 返回 undefined 而当场关闭（实测症状：
+         * 切象限后抽屉一闪而没，任务凭空消失）。
+         * 与上方 rest 分支保持对称的 add-or-update 语义即可。
+         */
+        const next = (
+          prev.some((t) => t.id === updated.id)
+            ? prev.map((t) => (t.id === updated.id ? updated : t))
+            : [...prev, updated]
+        ).sort(byScheduledTime);
         saveSnapshot(next, tasksDateRef.current);
         return next;
       });
@@ -761,6 +792,71 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       setReviewTaskId(id);
     },
     [findTask, commitTask]
+  );
+
+  /**
+   * 撤回完成（反悔）：`done` → `pending`。
+   *
+   * 场景是「手滑打了钩」或「本想明天做」——打钩是单点动作，误触率天然高于其他操作，
+   * 所以撤销入口必须和打钩本身一样轻（卡片上再点一次圆圈即可）。
+   *
+   * 刻意**不清空时间切片与微复盘**：那些是真实发生过的记录。
+   * 若一并抹掉，用户为了纠正一次误触会付出丢掉已记时长/经验的代价，比不撤销更糟。
+   *
+   * 已经打开着的微复盘抽屉要顺手关掉 —— 它正指向一个刚被撤回的任务，
+   * 留着会让「入库」按钮把一次未发生的完成记录下来。
+   */
+  const reopenTask = useCallback(
+    (id: string) => {
+      const target = findTask(id);
+      if (!target || target.status !== "done") return;
+      commitTask({ ...target, status: "pending" as const });
+      setReviewTaskId((cur) => (cur === id ? null : cur));
+      pushToast(`已撤回完成「${target.title}」，重新可计时`, "info");
+    },
+    [findTask, commitTask, pushToast]
+  );
+
+  /**
+   * 象限自由转移 —— 四象限任意互转（含「移出到待执行池」与「移入今日战局」两个方向）。
+   *
+   * `commitTask` 按**新** category 路由：写进目标池的同时从原池摘掉同 id，
+   * 所以"搬家"是原子的，不会两池各留一份。
+   *
+   * ⚠️ 还要改写离线队列里那笔尚未补录的 insert：本地临时 id 的任务通常还没落库，
+   * 队列里存着它的旧 category。不改的话，断网时恢复网络一补录，象限就被打回原形
+   * （表现为「我明明挪到 Q1 了，一联网又回到待执行清单」）。
+   */
+  const moveTaskQuadrant = useCallback(
+    (id: string, quadrant: Quadrant) => {
+      const target = findTask(id);
+      if (!target) return;
+      const category = quadrantToCategory(quadrant);
+      if (target.category === category) return; // 没变，省掉一次无意义的云端写
+      if (target.status === "frozen") {
+        pushToast("该任务已冷冻，解冻后再调整象限", "warn");
+        return;
+      }
+      const updated: Task = { ...target, category };
+      // frozen 不是合法目标态，这里只改象限；黑洞倒计时时长按需补齐，
+      // 让任务挪进 Q4 后立刻能用上刹车机制（否则抽屉里的倒计时没有默认值）
+      if (category === "blackhole" && !updated.blackholeMinutes) {
+        updated.blackholeMinutes = 30;
+      }
+      commitTask(updated);
+
+      const queued = loadQueue().find((op) => op.type === "insert" && op.task.id === id);
+      if (queued && queued.type === "insert") enqueue({ ...queued, task: updated });
+
+      const label = QUADRANT_META[quadrant].label;
+      pushToast(
+        category === "rest"
+          ? `已移出到【${label}】，稍后再做`
+          : `已移入【${label}】· 今日战局`,
+        "success"
+      );
+    },
+    [findTask, commitTask, pushToast]
   );
 
   const closeReview = useCallback(() => setReviewTaskId(null), []);
@@ -1371,6 +1467,8 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     toggleTiming,
     renameTask,
     completeTask,
+    reopenTask,
+    moveTaskQuadrant,
     closeReview,
     submitReview,
     executeCommand,

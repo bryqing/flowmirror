@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   FastForward,
   ListChecks,
   Pause,
   Play,
+  RotateCcw,
   Sparkles,
   Timer,
 } from "lucide-react";
@@ -15,7 +17,14 @@ import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useFlow } from "@/components/flow-context";
-import { CATEGORY_META } from "@/lib/types";
+import {
+  CATEGORY_META,
+  QUADRANT_META,
+  QUADRANT_ORDER,
+  categoryToQuadrant,
+  type Quadrant,
+  type Task,
+} from "@/lib/types";
 import { cn, fmtClock, fmtDuration } from "@/lib/utils";
 import { ensureNotifyPermission, playBrake, playChime, notify } from "@/lib/sound";
 import { useAi } from "@/lib/use-ai";
@@ -24,19 +33,41 @@ import { WandSparkles, Loader2 } from "lucide-react";
 type TimerState = "idle" | "running" | "paused" | "finished";
 
 export function TaskDetailDrawer() {
-  const { detailTask, closeDetail, completeTask } = useFlow();
+  const { detailTask, closeDetail, completeTask, reopenTask, moveTaskQuadrant } = useFlow();
   const open = !!detailTask;
 
   const [timer, setTimer] = useState<TimerState>("idle");
   const [secondsLeft, setSecondsLeft] = useState(25 * 60);
   const [totalSeconds, setTotalSeconds] = useState(25 * 60);
   const finishedRef = useRef(false);
+  /** 象限选择器是否展开（顶部胶囊 → 四选一） */
+  const [quadrantOpen, setQuadrantOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
 
   const { loading: aiLoading, result: aiResult, error: aiError, run: runTactic } = useAi("/api/ai/tactic");
 
   const isBlackhole = detailTask?.category === "blackhole";
   const done = detailTask?.status === "done";
   const frozen = detailTask?.status === "frozen";
+
+  /* 切换任务 / 关闭时收起象限选择器，避免下次打开残留展开态 */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setQuadrantOpen(false);
+  }, [detailTask?.id]);
+
+  /* 点击外部收起象限选择器（Portal 内的下拉同理会命中"面板外"，
+     但这里的选择器是面板内联渲染的普通 div，不存在嵌套 Portal 的误杀问题） */
+  useEffect(() => {
+    if (!quadrantOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setQuadrantOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [quadrantOpen]);
 
   const startTimer = useCallback((minutes: number) => {
     const total = minutes * 60;
@@ -108,21 +139,23 @@ export function TaskDetailDrawer() {
           <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl border", meta.bg, meta.border)}>
             <Timer className={cn("size-4.5", meta.text)} />
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h3 className={cn("text-base font-medium leading-snug tracking-tight", done && "text-muted-foreground line-through")}>
               {detailTask.title}
             </h3>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <Badge
-                variant={
-                  detailTask.category === "deep-work" ? "deep"
-                  : detailTask.category === "chore" ? "chore"
-                  : detailTask.category === "blackhole" ? "blackhole"
-                  : "rest"
-                }
-              >
-                {meta.label}
-              </Badge>
+              {/* 象限归属：静态标签 → 可点击的胶囊选择器（四象限任意互转） */}
+              <QuadrantPicker
+                current={detailTask.category}
+                open={quadrantOpen}
+                onToggle={() => setQuadrantOpen((v) => !v)}
+                onPick={(q) => {
+                  setQuadrantOpen(false);
+                  moveTaskQuadrant(detailTask.id, q);
+                }}
+                pickerRef={pickerRef}
+                disabled={frozen}
+              />
               {detailTask.scheduledTime && (
                 <span className="font-mono text-[11px] text-subtle-foreground">{detailTask.scheduledTime}</span>
               )}
@@ -130,13 +163,25 @@ export function TaskDetailDrawer() {
                 <span className="text-[11px] text-subtle-foreground">计划 {fmtDuration(detailTask.plannedDuration)}</span>
               )}
               {frozen && <Badge variant="chore">已熔断冷冻</Badge>}
-              {done && <Badge variant="rest">已完成</Badge>}
+              {/* 「已完成」胶囊本身可点：点一下即撤回（与卡片上再点圆圈等价） */}
+              {done && (
+                <button
+                  data-drawer-reopen
+                  onClick={() => reopenTask(detailTask.id)}
+                  title="点击撤回完成"
+                  className="group/reopen inline-flex items-center gap-1 rounded-full border border-cat-rest/40 bg-cat-rest/10 px-2 py-0.5 text-[11px] font-medium leading-4 text-cat-rest transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <CheckCircle2 className="size-3 group-hover/reopen:hidden" />
+                  <RotateCcw className="hidden size-3 group-hover/reopen:block" />
+                  已完成
+                </button>
+              )}
             </div>
           </div>
         </div>
 
-        {/* 计时器 */}
-        {!frozen && (
+        {/* 计时器：已完成任务不再显示（要计时就先撤回，避免"已完成的还在跑倒计时"） */}
+        {!frozen && !done && (
           <div
             className={cn(
               "flex items-center gap-4 rounded-2xl border p-4",
@@ -299,19 +344,128 @@ export function TaskDetailDrawer() {
         )}
 
         {/* 底部操作 */}
-        {!done && !frozen && (
+        {!frozen && !done && (
           <Button className="w-full gap-1.5" onClick={handleComplete}>
             <CheckCircle2 className="size-4" />
             打钩完成 · 唤起微复盘
           </Button>
         )}
+        {/* 已完成 → 明确给出「撤回」出口（与顶部胶囊、卡片圆圈三处等价） */}
+        {done && !frozen && (
+          <Button
+            data-drawer-reopen-btn
+            variant="secondary"
+            className="w-full gap-1.5"
+            onClick={() => reopenTask(detailTask.id)}
+          >
+            <RotateCcw className="size-4" />
+            标记为未完成 · 撤回完成
+          </Button>
+        )}
         {done && (
-          <p className="text-center text-[11px] text-subtle-foreground">
-            已完成{detailTask.microReviews.length > 0 ? "并完成微复盘入库" : "，可在上方按钮补录复盘"}
+          <p className="text-center text-[11px] leading-relaxed text-subtle-foreground">
+            撤回后任务回到「{meta.label}」
+            {detailTask.category === "rest" ? "（全局待执行池）" : "（今日战局）"}，
+            可继续计时与打卡；已记录 {detailTask.timeSlices.length > 0 ? "的计时切片与" : ""}微复盘会保留。
           </p>
         )}
       </div>
     </Sheet>
+  );
+}
+
+/**
+ * 象限归属选择器 —— 把原来静态的象限标签变成可点开的四选一。
+ *
+ * 内联在抽屉面板里（不另起 Portal）：这样"点击外部收起"只需判断
+ * 本容器的 contains，不会撞上"嵌套 Portal 被当成面板外点击"那个坑。
+ * 选择器本身用绝对定位展开成一个浮层，不改动标题区的高度。
+ */
+function QuadrantPicker({
+  current,
+  open,
+  onToggle,
+  onPick,
+  pickerRef,
+  disabled,
+}: {
+  current: Task["category"];
+  open: boolean;
+  onToggle: () => void;
+  onPick: (q: Quadrant) => void;
+  pickerRef: RefObject<HTMLDivElement | null>;
+  disabled: boolean;
+}) {
+  const meta = CATEGORY_META[current];
+  const currentQuadrant = categoryToQuadrant(current);
+
+  return (
+    <div ref={pickerRef} className="relative inline-flex">
+      <button
+        data-quadrant-picker
+        onClick={onToggle}
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={`当前归属「${meta.label}」，点击切换象限`}
+        title={disabled ? "已冷冻，解冻后可调整象限" : "点击切换象限"}
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 transition-all",
+          meta.border,
+          meta.bg,
+          meta.text,
+          !disabled && "hover:brightness-[0.97]",
+          disabled && "cursor-not-allowed opacity-60"
+        )}
+      >
+        <span className={cn("size-1.5 shrink-0 rounded-full", meta.dot)} />
+        {meta.label}
+        <ChevronDown className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          data-quadrant-options
+          aria-label="选择象限"
+          className="absolute left-0 top-[calc(100%+6px)] z-30 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white p-1 shadow-lg"
+        >
+          {QUADRANT_ORDER.map((q) => {
+            const qm = QUADRANT_META[q];
+            const cm = CATEGORY_META[qm.category];
+            const isCurrent = q === currentQuadrant;
+            return (
+              <button
+                key={q}
+                role="option"
+                aria-selected={isCurrent}
+                data-quadrant-option={q}
+                onClick={() => onPick(q)}
+                className={cn(
+                  "flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
+                  isCurrent ? "bg-slate-100" : "hover:bg-slate-50"
+                )}
+              >
+                <span className={cn("mt-1 size-1.5 shrink-0 rounded-full", cm.dot)} />
+                <span className="min-w-0 flex-1">
+                  <span className={cn("flex items-baseline gap-1.5 text-xs font-medium", cm.text)}>
+                    <span className="font-mono text-[9px] opacity-60">{q.toUpperCase()}</span>
+                    {qm.label}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] leading-snug text-subtle-foreground">
+                    {qm.hint}
+                  </span>
+                </span>
+                {isCurrent && <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-slate-400" />}
+              </button>
+            );
+          })}
+          <p className="px-2 pb-1 pt-1.5 text-[10px] leading-snug text-subtle-foreground">
+            四个象限可任意互转，切换后立即归入对应板块。
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 

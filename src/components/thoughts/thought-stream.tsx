@@ -20,7 +20,7 @@ import { thoughtRepo, localDateKey } from "@/lib/thought-repository";
 import { formatStamp } from "@/lib/task-time";
 import { useAiStream } from "@/lib/use-ai-stream";
 import { extractTags, stripTags } from "@/lib/tags";
-import { CATEGORY_META, type Task, type TaskCategory, type Thought } from "@/lib/types";
+import { CATEGORY_META, QUADRANT_META, categoryToQuadrant, type Task, type TaskCategory, type Thought } from "@/lib/types";
 import { TaskPickerDialog } from "@/components/thoughts/task-picker-dialog";
 import { cn } from "@/lib/utils";
 
@@ -143,19 +143,30 @@ export function ThoughtStream() {
     if (ok) setThoughts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // 灵感转待办：选象限 → 建任务 → 回写关联
+  // 灵感转待办：选象限 → 建任务 → 回写关联。
+  //
+  // 目标象限由用户在弹窗里指定（四选一，含直接转 Q1 紧急重要 / Q2 日常工作），
+  // 不再固定沉进 Q3 待执行清单 —— 所以这里必须把象限名带进 toast，
+  // 否则用户点完只看到"已转为待办"，无法确认到底落到哪个板块。
   const handlePickQuadrant = async (category: TaskCategory) => {
     const thought = pickerThought;
     if (!thought) return;
     setPickerThought(null);
     setConvertingId(thought.id);
+    const quadrant = categoryToQuadrant(category);
+    const label = QUADRANT_META[quadrant].label;
     const taskId = await addTask(stripTags(thought.content) || thought.content, category);
     if (taskId) {
       await thoughtRepo.update(thought.id, { taskId });
       setThoughts((prev) =>
         prev.map((t) => (t.id === thought.id ? { ...t, taskId } : t))
       );
-      pushToast("已转为待办并放入象限", "success");
+      pushToast(
+        category === "rest"
+          ? `已转入【${label}】，稍后处理`
+          : `已转为【${label}】· 今日战局任务`,
+        "success"
+      );
     } else {
       pushToast("转待办失败，请重试", "danger");
     }
@@ -293,6 +304,7 @@ export function ThoughtStream() {
       <TaskPickerDialog
         open={pickerThought !== null}
         title={pickerThought ? stripTags(pickerThought.content) || pickerThought.content : ""}
+        reassign={!!pickerThought?.taskId}
         onClose={() => setPickerThought(null)}
         onPick={handlePickQuadrant}
       />
@@ -352,9 +364,9 @@ function ThoughtCard({
             size="xs"
             variant="ghost"
             onClick={onConvert}
-            disabled={converting || !!thought.taskId}
+            disabled={converting}
             className="gap-1 text-[11px] text-cat-deep hover:bg-cat-deep/10"
-            title="转为待办"
+            title={thought.taskId ? "改指其他象限（重新生成一条任务）" : "转为待办 · 可指定象限"}
           >
             {converting ? (
               <Loader2 className="size-3 animate-spin" />
@@ -363,7 +375,7 @@ function ThoughtCard({
             ) : (
               <ListTodo className="size-3" />
             )}
-            {thought.taskId ? "已入格" : "转待办"}
+            {thought.taskId ? "已转任务" : "转待办"}
           </Button>
           <Button
             size="xs"
@@ -386,9 +398,10 @@ function ThoughtCard({
         </div>
       </div>
 
-      {/* 已关联任务状态徽标 */}
+      {/* 已关联任务状态徽标（跟随任务当前象限实时变化：在抽屉里改了象限，这里立刻跟着变） */}
       {linkedTask && linkedMeta && (
         <div
+          data-thought-link
           className={cn(
             "flex items-center gap-2 rounded-lg border px-2.5 py-1.5",
             linkedMeta.border,
@@ -396,11 +409,14 @@ function ThoughtCard({
           )}
         >
           <span className={cn("size-1.5 rounded-full", linkedMeta.dot)} />
+          <span className={cn("font-mono text-[10px] opacity-60", linkedMeta.text)}>
+            {categoryToQuadrant(linkedTask.category).toUpperCase()}
+          </span>
           <span className={cn("text-[11px] font-medium", linkedMeta.text)}>
             {linkedMeta.label}
           </span>
           <span className="text-[11px] text-muted-foreground">
-            已关联待办 · {taskStatusLabel(linkedTask.status)}
+            已转任务 · {taskStatusLabel(linkedTask.status)}
           </span>
         </div>
       )}

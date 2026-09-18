@@ -59,6 +59,7 @@ export function TaskQuadrants({ mode = "battle" }: { mode?: "battle" | "backlog"
     backlogTasks,
     openDetail,
     completeTask,
+    reopenTask,
     addTask,
     deleteTask,
     pushToast,
@@ -123,6 +124,7 @@ export function TaskQuadrants({ mode = "battle" }: { mode?: "battle" | "backlog"
             subtitle={isBacklog ? formatStamp(task.createdAt, { full: true }) : undefined}
             onOpen={() => openDetail(task.id)}
             onComplete={() => completeTask(task.id)}
+            onReopen={() => reopenTask(task.id)}
             onSetTime={(start, duration) => setTaskTime(task.id, start, duration)}
             onToggleTiming={() => toggleTiming(task.id)}
             onRename={(title) => renameTask(task.id, title)}
@@ -412,6 +414,7 @@ function TaskChip({
   subtitle,
   onOpen,
   onComplete,
+  onReopen,
   onSetTime,
   onToggleTiming,
   onRename,
@@ -421,6 +424,8 @@ function TaskChip({
   subtitle?: string | null;
   onOpen: () => void;
   onComplete: () => void;
+  /** 已完成的圆圈再点一次 = 撤回完成（反悔） */
+  onReopen: () => void;
   onSetTime: (startClock: string | undefined, durationMin: number | undefined) => void;
   onToggleTiming: () => void;
   onRename: (title: string) => void;
@@ -522,23 +527,35 @@ function TaskChip({
     >
       {/* 主行：打钩 + 标题（break-words 自动折行）+ 右侧操作组（贴右对齐，不与长文本抢宽度） */}
       <div className="flex items-center gap-2">
-      {/* 快速打钩（不打开抽屉） */}
+      {/* 快速打钩（不打开抽屉）。已完成状态下再点一次 = 撤回完成（反悔） */}
       <button
+        data-task-toggle
         onClick={(e) => {
           e.stopPropagation();
-          if (!frozen && !done) onComplete();
+          if (frozen) return;
+          if (done) onReopen();
+          else onComplete();
         }}
-        disabled={frozen || done}
-        aria-label={done ? "已完成" : "标记完成并微复盘"}
+        disabled={frozen}
+        aria-label={done ? `撤回完成「${task.title}」` : `标记完成「${task.title}」`}
+        title={done ? "点击撤回完成（反悔）" : "标记完成并微复盘"}
         className={cn(
-          "flex size-4 shrink-0 items-center justify-center rounded-full border transition-all",
+          "group/tick flex size-4 shrink-0 items-center justify-center rounded-full border transition-all",
           done
-            ? "border-cat-rest bg-cat-rest text-white"
+            ? "border-cat-rest bg-cat-rest text-white hover:border-slate-400 hover:bg-slate-300"
             : "border-slate-300 text-transparent hover:border-cat-rest hover:text-cat-rest/60",
           frozen && "cursor-not-allowed"
         )}
       >
-        <Check className="size-2.5" strokeWidth={3.5} />
+        {/* 已完成时悬停把对钩换成「撤回」的提示符，让「再点一次能反悔」这件事看得见 */}
+        {done ? (
+          <>
+            <Check className="size-2.5 group-hover/tick:hidden" strokeWidth={3.5} />
+            <X className="hidden size-2.5 group-hover/tick:block" strokeWidth={3.5} />
+          </>
+        ) : (
+          <Check className="size-2.5" strokeWidth={3.5} />
+        )}
       </button>
 
       {editing ? (

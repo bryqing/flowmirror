@@ -20,13 +20,15 @@ interface TaskPickerDialogProps {
   onClose: () => void;
   /** 用户选中某个象限后回调 */
   onPick: (category: TaskCategory) => void;
+  /** 该灵感之前是否已转过任务（用于切换文案：首次转入 vs 改指归宿） */
+  reassign?: boolean;
 }
 
 /**
  * 灵感转待办 · 象限选择弹窗
  * 通过 createPortal 挂载到 document.body 顶层，脱离局部容器约束（同 Sheet 架构约定）。
  */
-export function TaskPickerDialog({ open, title, onClose, onPick }: TaskPickerDialogProps) {
+export function TaskPickerDialog({ open, title, onClose, onPick, reassign = false }: TaskPickerDialogProps) {
   const [mounted, setMounted] = useState(false);
   const [closing, setClosing] = useState(false);
 
@@ -83,7 +85,9 @@ export function TaskPickerDialog({ open, title, onClose, onPick }: TaskPickerDia
         >
           <div className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[11px] uppercase tracking-[0.14em] text-candle/70">转为待办</p>
+              <p className="text-[11px] uppercase tracking-[0.14em] text-candle/70">
+                {reassign ? "改指归宿" : "转为待办"}
+              </p>
               <h3 className="mt-1 line-clamp-2 text-sm font-medium leading-snug text-foreground">
                 {title}
               </h3>
@@ -97,7 +101,11 @@ export function TaskPickerDialog({ open, title, onClose, onPick }: TaskPickerDia
             </button>
           </div>
 
-          <p className="mb-3 text-[11px] text-subtle-foreground">放入哪个象限？</p>
+          <p className="mb-3 text-[11px] text-subtle-foreground">
+            {reassign
+              ? "重新选一个象限，会再生成一条任务并改挂关联。"
+              : "放入哪个象限？可直接转 Q1 紧急重要 / Q2 日常工作，也可以先沉入 Q3 待执行清单。"}
+          </p>
 
           <div className="flex flex-col gap-1.5">
             {QUADRANTS.map((q) => {
