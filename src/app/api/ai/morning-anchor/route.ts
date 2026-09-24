@@ -29,24 +29,6 @@ interface LessonInput {
   text?: string;
 }
 
-/** 直接返回静态 SSE 文本（不调用模型，用于降级场景） */
-function staticSse(payload: Record<string, unknown>): Response {
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: JSON.stringify(payload) })}\n\n`));
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
-      controller.close();
-    },
-  });
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-    },
-  });
-}
-
 /** 从模型输出里稳健地抠出 JSON（容忍 ```json 包裹 / 前后废话） */
 function extractJson(raw: string): { slogan: string; action: string } | null {
   const cleaned = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
@@ -124,17 +106,23 @@ ${contextParts.join("\n")}
     '{"slogan":"...","action":"..."}',
     "· slogan：12~15 个汉字的动作断言（祈使句或断言句），必须直指昨日卡点，不要空泛口号（禁止「加油」「努力」「坚持」这类词）。",
     "· action：25~45 字，说清两件事——① 昨日卡点是什么（具体到行为）；② 今日几点前做什么（必须带明确时间锚点，如「10:00 前」「午休前 10 分钟」）。",
+    "· **只准使用上面【昨日之镜给到的事实】里出现过的任务名**。没有给到具体任务时，不要编造任务名，改用描述性的说法（如「昨天那件一直没收尾的事」）。",
     "再次强调：你的回复内容必须**只有一个 JSON 对象**，第一个字符是 {，最后一个字符是 }。",
   ].join("\n");
 
-  // 兜底：模型偶发返回空 / 非法 JSON 时使用
-  const fallback = {
-    slogan: "不等状态，先动十分钟",
-    action: unfinished.length
-      ? `昨日「${unfinished[0]}」还悬着——今天 10:00 前先只做它的第一步，不准改措辞。`
-      : "昨日节奏尚可，今天上午 10:00 前先把最硬的那件事推到「有初稿」的程度，再谈优化。",
-  };
-
+  /**
+   * ⚠️ **刻意没有任何兜底文案。**
+   *
+   * 早先这里写死过 `slogan: "不等状态，先动十分钟"` +
+   * `action: 昨日「${unfinished[0]}」还悬着——…`，本意是"模型抽风时也别空着"。
+   * 结果是灾难性的：它是一条**长得和真心锚一模一样**的编造内容，会被落库、
+   * 会跨设备同步、会一直挂在卡片最上方 —— 用户完全无法分辨
+   * 「这是系统编的」还是「这是我昨天写的」。更糟的是它把任务名硬塞进模板，
+   * 于是一旦上游传来过一条历史脏任务，那句话就永远带着那个陌生任务名。
+   *
+   * 现在改为：模型没给出有效内容 → 明确报错。宁可空着让用户点一次重试，
+   * 也不替他编一句他自己从没说过的话。
+   */
   const encoder = new TextEncoder();
   const messages = [
     { role: "system" as const, content: system },
@@ -161,16 +149,16 @@ ${contextParts.join("\n")}
             buffer += delta;
           }
         }
-        // 模型返回空 → 直接给兜底
+        // 模型返回空 / 非法 JSON → **如实报错，不编内容**
         const parsed = produced ? extractJson(buffer) : null;
         if (parsed) {
           send({ text: JSON.stringify(parsed) });
         } else {
-          send({ text: JSON.stringify(fallback) });
+          send({ error: "AI 未能凝练出心锚（模型未返回有效内容），请重试或自己写一句" });
         }
         send({ done: true });
       } catch (err) {
-        send({ text: JSON.stringify(fallback) });
+        send({ error: "AI 凝练服务暂时不可用，请重试或自己写一句" });
         send({ done: true });
         console.warn("[FlowMirror] 晨间心锚生成异常：", err);
       } finally {
@@ -189,10 +177,10 @@ ${contextParts.join("\n")}
   });
 }
 
-/** 降级静态心锚（供外部调试 / 无参调用） */
-export function GET() {
-  return staticSse({
-    slogan: "不等状态，先动十分钟",
-    action: "把最硬的那件事在 10:00 前推到「有初稿」，再谈优化。",
-  });
-}
+/**
+ * 无参 GET 已**刻意移除**。
+ *
+ * 它以前会返回一条写死的静态心锚（"不等状态，先动十分钟"），
+ * 于是任何一次外部探测 / 手滑刷新都能拿到一句"看起来像心锚"的编造内容。
+ * 心锚只能由「真实昨日事实 + 模型凝练」产生，不存在"降级样本"这种东西。
+ */

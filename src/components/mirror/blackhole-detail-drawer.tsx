@@ -29,12 +29,19 @@ export function BlackholeDetailDrawer({
   mirror,
   focusIndex,
   onClose,
+  dayWord = "昨日",
 }: {
   open: boolean;
   mirror: DayMirror;
   /** 被点击的具体条目索引（高亮定位），null 表示从整卡进入 */
   focusIndex: number | null;
   onClose: () => void;
+  /**
+   * 所选日期在文案里的称呼（「昨日」/「9月11日」）。
+   * 昨日之镜可以回看任意历史某天，抽屉里的文字必须跟着走 ——
+   * 否则翻到上月某天时，抽屉标题还写着「昨日时间黑洞」。
+   */
+  dayWord?: string;
 }) {
   const { reply, streaming, error, send } = useAiStream("/api/ai/blackhole-tactic");
   const focusedRef = useRef<HTMLDivElement>(null);
@@ -92,7 +99,7 @@ export function BlackholeDetailDrawer({
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="昨日时间黑洞 · 失控溯源">
+    <Sheet open={open} onClose={onClose} title={`${dayWord}时间黑洞 · 失控溯源`}>
       <div className="flex flex-col gap-5 px-5 pb-8 pt-1">
         {/* 概览 */}
         <div className="flex items-center gap-3 rounded-2xl border border-cat-blackhole/20 bg-cat-blackhole/[0.07] p-3.5">
@@ -139,7 +146,7 @@ export function BlackholeDetailDrawer({
             <p className="text-[11px] leading-relaxed text-cat-blackhole/80">{error}</p>
           ) : (
             <p className="text-[11px] leading-relaxed text-subtle-foreground">
-              基于昨日失控时段与诱因，让 AI 给你今日可立即执行的环境防线与动作清单。
+              基于{dayWord}失控时段与诱因，让 AI 给你今日可立即执行的环境防线与动作清单。
             </p>
           )}
         </div>
@@ -152,7 +159,7 @@ export function BlackholeDetailDrawer({
           </p>
           {slices.length === 0 && (
             <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3.5 py-3 text-[11px] leading-relaxed text-muted-foreground">
-              昨日没有休闲娱乐时段记录 —— 没有失控段可溯源。若你确实刷了视频/打了游戏，去任务卡片上标个时间段或按 ▶ 计时，明天这里就有数据了。
+              {dayWord}没有休闲娱乐时段记录 —— 没有失控段可溯源。若你确实刷了视频/打了游戏，去任务卡片上标个时间段或按 ▶ 计时，明天这里就有数据了。
             </p>
           )}
           {slices.map((s, i) => {

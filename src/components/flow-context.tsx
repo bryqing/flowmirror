@@ -116,14 +116,40 @@ interface FlowContextValue {
   /** 一键回到今天 */
   goToday: () => void;
   /**
-   * 前一天（相对今天，不跟随 selectedDate）的任务列表。
-   * 昨日之镜的完成率等指标直接由它算出，不读 mock。
+   * **昨日之镜的查看日期** —— 一条独立于战局 `selectedDate` 的日期坐标。
+   *
+   * 默认落在「昨天」，但用户可以顺着板块内的日期条回看任意历史某天。
+   * 刻意不与 `selectedDate` 共用：那块模块的语义是「回顾一个已经过完的日子」，
+   * 若跟着战局一起跳到上月某天，晨间锚点就变成了那天的镜像，语义会散。
+   * 未来日期一律会被钳制回今天（还没过完的日子没有「复盘」可言）。
+   */
+  mirrorDate: string;
+  /** 切换昨日之镜的查看日期（晚于今天的会被钳制为今天） */
+  setMirrorDate: (key: string) => void;
+  /** 昨天（`today - 1`）的日期 key；日期条上「回到昨日」的目标，也是默认视图 */
+  yesterdayDate: string;
+  /** 是否正在看昨天；false = 正在回看更早的某一天 */
+  isViewingYesterday: boolean;
+  /** 把昨日之镜切回「昨天」 */
+  goYesterday: () => void;
+  /** 昨日之镜**当前选中日期**的真实任务（完成率等指标由它算出，不读 mock） */
+  mirrorTasks: Task[];
+  /**
+   * 所选日期的数据是否已装载完毕。
+   * 切换日期后会自动失效，因此不会出现「拿上一天的数字冒充新一天」。
+   */
+  mirrorReady: boolean;
+  /**
+   * **昨天的真实任务**（`today - 1`，与 `mirrorDate` 解耦）。
+   *
+   * 晨间心锚要用它回答「昨天还剩什么没做完」—— 这是心锚唯一的"昨日事实"来源。
+   * 刻意不复用 `mirrorTasks`：那块是**用户当前翻到的那一天**，回看上月某天时
+   * 它已经不再是昨天，心锚会跟着跳成那天的遗留，语义就散了。
+   *
+   * 同样以空数组起步、不读任何预置数据。昨天确实没有记录时它就是 `[]`，
+   * 心锚据此走纯正向引导空态 —— **绝不凭空捏造一个任务名**。
    */
   yesterdayTasks: Task[];
-  /** 前一天的日期 key "YYYY-MM-DD" */
-  yesterdayDate: string;
-  /** 昨日任务是否已完成加载（本地快照 + 远端尝试都已结束） */
-  yesterdayReady: boolean;
   /**
    * 标记任务的时间段（开始时刻 + 时长，分钟）。
    * 传 undefined 表示清除。**会清空该任务已记录的计时切片**（重新规划语义）。
@@ -236,10 +262,34 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const [selectedDate, setSelectedDate] = useState<string>(() => todayKey());
   /** 挂载后校准的「今天」。初值与 selectedDate 同源，SSR 与首帧一致，不产生水合差异 */
   const [today, setToday] = useState<string>(() => todayKey());
-  /** 前一日任务（昨日之镜的数据源）。与 selectedDate 平行，始终是「今天 - 1 天」 */
-  const [yesterdayTasks, setYesterdayTasks] = useState<Task[]>([]);
-  const [yesterdayReady, setYesterdayReady] = useState(false);
+  /**
+   * **昨日之镜的查看日期** —— 独立于 `selectedDate` 的一条日期坐标。
+   *
+   * 默认是「昨天」，用户可以顺着板块内的日期条回看任意历史某天。之所以不共用
+   * `selectedDate`：那块模块的语义是「回顾一个已经过完的日子」，跟着战局跳到
+   * 上月某天会让它变成那天的镜像，晨间锚点的含义就散了。
+   */
+  /**
+   * **用户手动选过的昨日之镜日期**（`null` = 还没动过）。
+   *
+   * 存「有没有被选过」而不是「初始值写死成昨天」：挂载时若刚好跨过零点，
+   * 下面的 `today` 会被校准到新的一天，默认视图也就该跟着落到新的「昨天」。
+   */
+  const [mirrorDatePicked, setMirrorDatePicked] = useState<string | null>(null);
+  /** 昨天（`today - 1`）—— 日期条的默认视图，也是「回到昨日」的目标 */
   const yesterdayDate = useMemo(() => shiftDateKey(today, -1), [today]);
+  /** 昨日之镜当前选中日期的真实任务（初始为空，装载完才填） */
+  const [mirrorTasks, setMirrorTasks] = useState<Task[]>([]);
+  /**
+   * **已装载完毕的日期** —— 刻意存「哪一天」而不是布尔量。
+   *
+   * 切换日期后 `mirrorReady`（= `mirrorLoadedDate === mirrorDate`）会自动变回
+   * false，不必在 effect 里再补一次「先置 false 再请求」的 setState；
+   * 那种写法既会多一次渲染，又容易在 effect 顺序变化时留下短暂的状态错位。
+   */
+  const [mirrorLoadedDate, setMirrorLoadedDate] = useState<string | null>(null);
+  /** 昨天的真实任务（晨间心锚的"昨日事实"来源，与 mirrorDate 解耦） */
+  const [yesterdayTasks, setYesterdayTasks] = useState<Task[]>([]);
 
   /**
    * 看板当前**真实代表**的日期 —— 也就是 `tasks` 数组实际归属的那一天。
@@ -297,8 +347,38 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   );
 
   const isViewingToday = selectedDate === today;
+  /**
+   * 昨日之镜的查看日期：用户选过就用他选的，没选过就跟随「昨天」。
+   * 后面这种写法让默认视图天然跟随跨零点被校准的 `today`。
+   */
+  const mirrorDate = mirrorDatePicked ?? yesterdayDate;
+  /** 昨日之镜是否停在默认视图（昨天） */
+  const isViewingYesterday = mirrorDate === yesterdayDate;
+  /**
+   * 昨日之镜的数据是否已就位。
+   *
+   * 由「装载的是哪一天」推导而来，所以切到新的日期后会立刻变回 false，
+   * 界面回到「统计中…」，绝不会把上一天的完成率当成新一天的结果显示。
+   */
+  const mirrorReady = mirrorLoadedDate === mirrorDate;
 
   const goToday = useCallback(() => setSelectedDate(today), [today]);
+
+  /**
+   * 切换昨日之镜的查看日期。
+   *
+   * 晚于今天的日期一律钳制回今天：未来还没过完，没有「复盘切片」可取。
+   * 同值切换直接复用旧引用，避免点同一颗胶囊触发一次无意义的重渲染。
+   */
+  const setMirrorDate = useCallback(
+    (key: string) => {
+      const next = key > today ? today : key;
+      setMirrorDatePicked((prev) => (prev === next ? prev : next));
+    },
+    [today]
+  );
+
+  const goYesterday = useCallback(() => setMirrorDate(yesterdayDate), [setMirrorDate, yesterdayDate]);
 
   // 远程写入开关：避免在 Realtime 回调里重复回写
   const suppressRemoteRef = useRef(false);
@@ -593,37 +673,77 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     setBacklogTasks(localBacklog());
   }, [localBacklog]);
 
-  // ---- 加载昨日任务（昨日之镜的真实指标数据源）----
+  // ---- 装载「昨日之镜」所选日期的任务（完成率 / 黑洞 / 教训的真实数据源）----
   //
-  // 与「当前查看日期」的装载刻意分开：昨日之镜永远看的是今天的前一天，
-  // 用户翻到别的历史日期时它不该跟着变，否则「昨日之镜」会显示成上月某天。
+  // 与「当前查看日期」的装载刻意分开：昨日之镜有自己的日期坐标 `mirrorDate`，
+  // 默认是昨天，用户回看更早的某天也只影响它自己。
   //
   // ⚠️ 只在**已登录**时才向云端确认。未登录时 Supabase 因 RLS 返回的是
   //    空数组而非错误，若照单全收会把用户离线记录的昨日任务抹掉。
-  //    登录之后云端就是权威：包括"昨天确实没有记录"这个结论
+  //    登录之后云端就是权威：包括"那天确实没有记录"这个结论
   //    （如实显示空态，而不是继续拿本地旧快照冒充）。
+  //
+  // ⚠️ 本地快照**读不到就写空数组**，绝不保留上一天的数据 —— 否则切到一个
+  //    空白日期时会短暂把前一天的完成率显示成"那天的"，这正是零 Mock 要杜绝的。
   useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
     void (async () => {
-      const snap = loadSnapshot(yesterdayDate);
-      if (!cancelled && snap) {
-        setYesterdayTasks(snap);
-        setYesterdayReady(true);
-      }
+      const local = localTasksFor(mirrorDate);
+      if (!cancelled) setMirrorTasks(local);
+
       if (isSupabaseConfigured() && synced) {
-        const remote = await fetchTasksOrNull(yesterdayDate);
+        const remote = await fetchTasksOrNull(mirrorDate);
         if (!cancelled && remote !== null) {
-          setYesterdayTasks(remote);
-          saveSnapshot(remote, yesterdayDate);
+          const dayPool = remote.filter(isDayPoolTask);
+          // 云端为空但本地还有「从未落库」的条目 → 保留本地：
+          // 用户在未登录时记下的真实任务不该被一次空响应抹掉。
+          const localOnly = local.filter((t) => !SERVER_ID.test(t.id));
+          if (!(dayPool.length === 0 && localOnly.length > 0)) {
+            setMirrorTasks(dayPool);
+            saveSnapshot(dayPool, mirrorDate);
+          }
         }
       }
-      if (!cancelled) setYesterdayReady(true);
+
+      if (!cancelled) setMirrorLoadedDate(mirrorDate);
     })();
     return () => {
       cancelled = true;
     };
-  }, [yesterdayDate, synced]);
+  }, [mirrorDate, synced, localTasksFor]);
+
+  // ---- 装载「昨天」的真实任务（晨间心锚唯一的昨日事实来源）----
+  //
+  // 与 `mirrorDate` 刻意解耦：心锚问的永远是「昨天剩了什么」，不该随用户
+  // 回看历史某天而变成那天的遗留。读不到就是空数组 —— 心锚据此走纯正向引导
+  // 空态，而不是替用户编一个任务名出来。
+  //
+  // ⚠️ 与镜像装载同一套「未登录不当权威」的判据：Supabase 在 RLS 下对未登录
+  //    返回空数组而非错误，照单全收会抹掉用户离线记下的真实任务。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    void (async () => {
+      const local = localTasksFor(yesterdayDate);
+      if (!cancelled) setYesterdayTasks(local);
+
+      if (isSupabaseConfigured() && synced) {
+        const remote = await fetchTasksOrNull(yesterdayDate);
+        if (!cancelled && remote !== null) {
+          const dayPool = remote.filter(isDayPoolTask);
+          // 云端为空 + 本地还有从未落库的条目 → 保留本地（同镜像装载的判据）
+          const localOnly = local.filter((t) => !SERVER_ID.test(t.id));
+          if (!(dayPool.length === 0 && localOnly.length > 0)) {
+            setYesterdayTasks(dayPool);
+          }
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [yesterdayDate, synced, localTasksFor]);
 
   // ---- 切换查看日期时拉取该日云端任务（已登录才发）----
   // 本地快照已在上面的 effect 里同步渲染过，这里做的是「以云端为准纠正它」，
@@ -1715,9 +1835,14 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     today,
     isViewingToday,
     goToday,
-    yesterdayTasks,
+    mirrorDate,
+    setMirrorDate,
     yesterdayDate,
-    yesterdayReady,
+    isViewingYesterday,
+    goYesterday,
+    mirrorTasks,
+    mirrorReady,
+    yesterdayTasks,
     setTaskTime,
     startTiming,
     stopTiming,

@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Ban,
+  CalendarRange,
   CheckCircle2,
   ChevronRight,
   Flame,
@@ -19,11 +20,12 @@ import {
   Sunrise,
 } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
+import { DayCapsules } from "@/components/layout/date-strip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sheet } from "@/components/ui/sheet";
 import { BlackholeDetailDrawer } from "./blackhole-detail-drawer";
 import { buildDayMirror } from "@/lib/mirror";
-import { effectiveMinutes, windowLabel } from "@/lib/task-time";
+import { effectiveMinutes, fmtDateLabel, windowLabel } from "@/lib/task-time";
 import { CATEGORY_META, type TaskStatus } from "@/lib/types";
 import { cn, fmtDuration } from "@/lib/utils";
 
@@ -40,13 +42,20 @@ import { cn, fmtDuration } from "@/lib/utils";
  * 等等），结果是没做任何复盘的人也看到一整屏"自己的感悟"，分不清哪些真实。
  * 宁可不显示，也不能让用户把编出来的句子当成自己的沉淀 —— 空态是诚实的信息。
  *
+ * ## 日期：默认昨天，可回看任意历史某天
+ * 板块顶部有自己的日期条（与战局同一套 `DayCapsules`，视觉与交互完全一致），
+ * 但它读写的是 context 里独立的 `mirrorDate` —— 默认落在「昨天」，
+ * 用户点某天就切到那天。**刻意不与战局的 `selectedDate` 共用**：
+ * 那块看的是「正在过的一天」，这块看的是「已经过完的一天」，
+ * 共用一个坐标会让两者互相拖拽（翻到上月某天时晨间锚点就变成那天的镜像了）。
+ *
+ * 未来日期一律置灰不可点（还没过完的日子没有复盘可言），
+ * 切换日期后内容整体重算；那天没有记录就只显示一张空态卡。
+ *
  * ## 排序：有内容的板块置顶
  * 板块顺序不再写死。每个板块先算一个「内容分」（真实录入的条数 / 时长），
  * 有内容的按内容量降序排在前面，没内容的折叠成一行沉到最下方。
  * 这样用户进来第一眼看到的一定是自己真的记过的东西，而不是空壳。
- *
- * 「昨日」始终是「今天 - 1 天」，不跟随日期栏的历史回看 —— 否则翻到上月某天时，
- * 这块晨间锚点会跟着变成那一天的镜像，语义就散了。
  */
 
 /** 任务状态 → 徽标文案与配色 */
@@ -60,29 +69,51 @@ const STATUS_META: Record<TaskStatus, { label: string; className: string }> = {
 /** 板块标识（顺序即「内容分相同时」的默认顺序） */
 type BlockId = "blackhole" | "fragments" | "completion" | "tasks" | "reflection";
 
-/** 折叠态板块的图标 / 标题 / 空态说明 */
-const COLLAPSED_META: Record<
-  BlockId,
-  { label: string; hint: string; icon: typeof Flame; openable: boolean }
-> = {
-  blackhole: { label: "昨日时间黑洞", hint: "没有休闲娱乐记录", icon: Flame, openable: true },
-  fragments: { label: "昨日记忆碎片", hint: "还没有沉淀下来的句子", icon: Quote, openable: true },
-  completion: { label: "完成率与总评", hint: "昨日无记录", icon: CheckCircle2, openable: false },
-  tasks: { label: "昨日任务明细", hint: "昨日没有任务", icon: ListChecks, openable: false },
+/** 折叠态板块的图标 / 标题 / 空态说明（标题随所选日期而变，故做成函数） */
+const collapsedMeta = (
+  dayWord: string
+): Record<BlockId, { label: string; hint: string; icon: typeof Flame; openable: boolean }> => ({
+  blackhole: { label: `${dayWord}时间黑洞`, hint: "没有休闲娱乐记录", icon: Flame, openable: true },
+  fragments: {
+    label: `${dayWord}记忆碎片`,
+    hint: "还没有沉淀下来的句子",
+    icon: Quote,
+    openable: true,
+  },
+  completion: { label: "完成率与总评", hint: `${dayWord}无记录`, icon: CheckCircle2, openable: false },
+  tasks: { label: `${dayWord}任务明细`, hint: `${dayWord}没有任务`, icon: ListChecks, openable: false },
   reflection: { label: "睡前感悟 / 今晨计划", hint: "还没有写过", icon: Moon, openable: false },
-};
+});
 
 export function YesterdayMirror() {
-  const { yesterdayTasks, yesterdayDate, yesterdayReady } = useFlow();
+  const {
+    mirrorTasks,
+    mirrorDate,
+    mirrorReady,
+    yesterdayDate,
+    isViewingYesterday,
+    setMirrorDate,
+    goYesterday,
+    today,
+  } = useFlow();
   const [fragmentsOpen, setFragmentsOpen] = useState(false);
   // 黑洞溯源抽屉：focusIndex 为被点击的具体条目索引，null 表示从整卡进入
   const [blackholeOpen, setBlackholeOpen] = useState(false);
   const [focusIndex, setFocusIndex] = useState<number | null>(null);
 
-  // 指标实时算自昨日真实任务；无记录时得到全空镜像（不是"示例"）
+  /**
+   * 所选日期在文案里的称呼：就停在昨天时叫「昨日」，回看更早的日子就写「9月11日」。
+   * 板块标题、折叠行、空态文案全部走它 —— 否则翻到上月某天时满屏还写着「昨日」，
+   * 用户会以为自己看错了日期。
+   */
+  const dayWord = isViewingYesterday ? "昨日" : fmtDateLabel(mirrorDate).split(" · ")[0];
+  /** 折叠态板块文案表（随 dayWord 变化） */
+  const collapsed = useMemo(() => collapsedMeta(dayWord), [dayWord]);
+
+  // 指标实时算自所选日期的真实任务；无记录时得到全空镜像（不是"示例"）
   const { mirror: m, isReal } = useMemo(
-    () => buildDayMirror(yesterdayTasks, yesterdayDate),
-    [yesterdayTasks, yesterdayDate]
+    () => buildDayMirror(mirrorTasks, mirrorDate),
+    [mirrorTasks, mirrorDate]
   );
 
   const pct = Math.round(m.completionRate * 100);
@@ -121,10 +152,10 @@ export function YesterdayMirror() {
         m.lessons.length * 10 +
         (m.mostTouching ? 5 : 0),
       completion: isReal ? 8 : 0,
-      tasks: isReal ? yesterdayTasks.length * 10 : 0,
+      tasks: isReal ? mirrorTasks.length * 10 : 0,
       reflection: (m.bedtimeReflection ? 4 : 0) + (m.morningPlan ? 4 : 0),
     }),
-    [m, isReal, yesterdayTasks.length]
+    [m, isReal, mirrorTasks.length]
   );
 
   /**
@@ -171,8 +202,17 @@ export function YesterdayMirror() {
     return { content, empty };
   }, [weights]);
 
+  /**
+   * 两张 hero 卡是否**并排**出现。
+   *
+   * 只在并排时才给它们 `min-h`：那是为了让左右两张卡等高、下标线对齐。
+   * 单独出现时若还撑着 17rem，就会在卡片中部留下一大块空白
+   * （内容只有一句金句，CTA 又被 `mt-auto` 推到底部）。
+   */
+  const heroPaired = layout.content.some((u) => u.key === "heroes");
+
   /** 数据来源标记：统计中 / 实时统计 / 暂无记录 */
-  const sourceBadge = !yesterdayReady
+  const sourceBadge = !mirrorReady
     ? { text: "统计中…", className: "border-slate-200 bg-slate-50 text-subtle-foreground" }
     : isReal
       ? { text: "实时统计", className: "border-cat-rest/30 bg-cat-rest/10 text-cat-rest" }
@@ -186,8 +226,11 @@ export function YesterdayMirror() {
       type="button"
       onClick={() => openBlackhole(null)}
       data-mirror-block="blackhole"
-      className="hero-rose group animate-fade-up flex min-h-[17rem] cursor-pointer flex-col rounded-2xl p-6 text-left sm:p-7"
-      aria-label="打开昨日时间黑洞失控溯源详情"
+      className={cn(
+        "hero-rose group animate-fade-up flex cursor-pointer flex-col rounded-2xl p-6 text-left sm:p-7",
+        heroPaired && "min-h-[17rem]"
+      )}
+      aria-label={`打开${dayWord}时间黑洞失控溯源详情`}
     >
       <div className="relative z-10 flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -195,7 +238,7 @@ export function YesterdayMirror() {
             <Flame className="size-4.5 text-cat-blackhole" />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-semibold tracking-tight">昨日时间黑洞</p>
+            <p className="text-sm font-semibold tracking-tight">{dayWord}时间黑洞</p>
             <p className="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-cat-blackhole/60">
               Time Black Hole
             </p>
@@ -278,8 +321,11 @@ export function YesterdayMirror() {
       type="button"
       onClick={() => setFragmentsOpen(true)}
       data-mirror-block="fragments"
-      className="hero-gold group animate-fade-up flex min-h-[17rem] flex-col rounded-2xl p-6 text-left sm:p-7"
-      aria-label="打开昨日记忆碎片与经验卡片库"
+      className={cn(
+        "hero-gold group animate-fade-up flex flex-col rounded-2xl p-6 text-left sm:p-7",
+        heroPaired && "min-h-[17rem]"
+      )}
+      aria-label={`打开${dayWord}记忆碎片与经验卡片库`}
     >
       <div className="relative z-10 flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -287,7 +333,7 @@ export function YesterdayMirror() {
             <Quote className="size-4.5 text-candle" />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-semibold tracking-tight">昨日记忆碎片</p>
+            <p className="text-sm font-semibold tracking-tight">{dayWord}记忆碎片</p>
             <p className="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-candle/60">
               Memory Fragments
             </p>
@@ -322,7 +368,7 @@ export function YesterdayMirror() {
       )}
 
       <p className="mt-auto pt-4 text-center text-[11px] text-slate-500 transition-colors group-hover:text-slate-800">
-        点击展开昨日全部 {assetCount} 条经验资产 →
+        点击展开{dayWord}全部 {assetCount} 条经验资产 →
       </p>
     </button>
   );
@@ -339,7 +385,7 @@ export function YesterdayMirror() {
               {m.doneCount}/{m.totalCount} 项 · 紧急重要 {fmtDuration(m.deepWorkMinutes)}
             </span>
             <span className="rounded-full border border-cat-rest/30 bg-cat-rest/10 px-1.5 py-px text-[10px] font-normal text-cat-rest">
-              由昨日任务实时计算
+              由{dayWord}任务实时计算
             </span>
           </p>
           {m.overallComment && (
@@ -350,20 +396,20 @@ export function YesterdayMirror() {
     </Card>
   );
 
-  /** 昨日任务明细：让完成率可逐条核对，而不是一个凭空出现的百分比 */
+  /** 所选日期的任务明细：让完成率可逐条核对，而不是一个凭空出现的百分比 */
   const tasksBlock = (
     <Card className="animate-fade-up" data-mirror-block="tasks">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-xs font-medium">
           <ListChecks className="size-3.5 text-cat-chore" />
-          昨日任务明细
+          {dayWord}任务明细
           <span className="font-mono text-[10px] font-normal text-subtle-foreground">
             {m.doneCount}/{m.totalCount} 完成
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 pt-0">
-        {yesterdayTasks.map((task) => {
+        {mirrorTasks.map((task) => {
           const status = STATUS_META[task.status];
           const window = windowLabel(task);
           const minutes = effectiveMinutes(task);
@@ -478,17 +524,49 @@ export function YesterdayMirror() {
         <p className="text-[11px] text-slate-500">{m.dateLabel} · 每日第一眼锚点</p>
       </div>
 
-      {yesterdayReady && layout.content.length === 0 ? (
+      {/* 回溯日期条 —— 与战局顶部同一套 `DayCapsules`（同样的胶囊窗口逻辑、
+          选中态、日历入口），但读写的是昨日之镜自己的 `mirrorDate`。
+          窗口铺在「前 6 天 ~ 明天」：明天那颗被 `maxKey` 置灰不可点，
+          把「复盘只能往回看」这条规则做成可见的边界，而不是点了没反应。 */}
+      <div
+        data-mirror-datebar
+        className="glass flex items-center gap-2 rounded-2xl px-3 py-2"
+      >
+        <span className="hidden shrink-0 items-center gap-1.5 pl-1 pr-2 text-[11px] text-subtle-foreground sm:flex">
+          <CalendarRange className="size-3.5" />
+          回看
+        </span>
+        <DayCapsules
+          compact
+          dataPrefix="mirror-date"
+          showTodayButton
+          value={mirrorDate}
+          onChange={setMirrorDate}
+          windowFrom={-6}
+          windowTo={1}
+          maxKey={today}
+          resetLabel="回到昨日"
+          resetKey={yesterdayDate}
+          onReset={goYesterday}
+        />
+        <span className="hidden shrink-0 pl-1 font-mono text-[10px] text-subtle-foreground md:inline">
+          {mirrorDate}
+        </span>
+      </div>
+
+      {mirrorReady && layout.content.length === 0 ? (
         /* 纯净空态：没有记录就不摆任何卡片、不显示任何数字与句子 */
         <Card className="animate-fade-up" data-mirror-empty>
           <CardContent className="flex flex-col items-center gap-2 px-6 py-12 text-center">
             <span className="flex size-11 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50">
               <Inbox className="size-5 text-slate-300" />
             </span>
-            <p className="text-sm font-medium text-slate-700">{m.dateLabel}暂无记录</p>
+            <p className="text-sm font-medium text-slate-700">
+              {isViewingYesterday ? "昨日暂无复盘沉淀" : "该日暂无复盘沉淀"}
+            </p>
             <p className="max-w-sm text-[11px] leading-relaxed text-muted-foreground">
-              完成任意任务并打钩或计时后，这里会变成你的镜像：完成率、失控时段、
-              微复盘里写下的踩坑教训都会逐条出现。
+              {m.dateLabel} 没有任何任务记录。完成任意任务并打钩或计时后，这里会变成
+              那一天的镜像：完成率、失控时段、微复盘里写下的踩坑教训都会逐条出现。
             </p>
           </CardContent>
         </Card>
@@ -519,10 +597,10 @@ export function YesterdayMirror() {
           {layout.empty.length > 0 && (
             <div className="flex flex-col gap-1.5" data-mirror-collapsed-zone>
               <p className="px-1 text-[11px] text-subtle-foreground">
-                以下板块昨日没有记录，已折叠置底
+                以下板块{dayWord}没有记录，已折叠置底
               </p>
               {layout.empty.map((id) => {
-                const meta = COLLAPSED_META[id];
+                const meta = collapsed[id];
                 const Icon = meta.icon;
                 const inner = (
                   <>
@@ -564,18 +642,18 @@ export function YesterdayMirror() {
         </>
       )}
 
-      {/* 记忆碎片抽屉：昨日全部经验资产（只渲染真有内容的区块） */}
+      {/* 记忆碎片抽屉：所选日期的全部经验资产（只渲染真有内容的区块） */}
       <Sheet
         open={fragmentsOpen}
         onClose={() => setFragmentsOpen(false)}
-        title="昨日记忆碎片 · 经验资产库"
+        title={`${dayWord}记忆碎片 · 经验资产库`}
       >
         <div className="flex flex-col gap-5 px-5 pb-8 pt-1">
           {assetCount === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
               <Inbox className="size-5 text-slate-300" />
               <p data-asset-empty className="text-sm font-medium text-slate-700">
-                昨日暂无沉淀记录
+                {dayWord}暂无沉淀记录
               </p>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 在任务详情里写一条微复盘（卡点或收获），或完成一次深夜认知深潜，
@@ -585,7 +663,7 @@ export function YesterdayMirror() {
           ) : (
             <>
               <p className="text-[11px] leading-relaxed text-slate-500">
-                共 {assetCount} 条，全部来自你昨日写下的微复盘与深潜记录。
+                共 {assetCount} 条，全部来自你{dayWord}写下的微复盘与深潜记录。
                 它们会在未来同类任务中作为「避坑教训」被主动召回。
               </p>
 
@@ -690,6 +768,7 @@ export function YesterdayMirror() {
         mirror={m}
         focusIndex={focusIndex}
         onClose={() => setBlackholeOpen(false)}
+        dayWord={dayWord}
       />
     </section>
   );

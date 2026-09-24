@@ -12,7 +12,7 @@
  * 配合 `src/lib/legacy-purge.ts` 清洗 localStorage，
  * 确保"源码已删掉的假数据"不会靠缓存继续活着。
  */
-const CACHE_VERSION = "v4";
+const CACHE_VERSION = "v5";
 const SHELL_CACHE = `flowmirror-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `flowmirror-runtime-${CACHE_VERSION}`;
 

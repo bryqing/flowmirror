@@ -39,9 +39,12 @@ import { ANCHOR_SNAPSHOT_KEY } from "./anchor-repository";
 /**
  * 缓存结构版本。**改动清洗规则时必须递增**，否则老设备不会重跑。
  * v2 = 移除全部演示任务与预置心锚的第一版清洗。
+ * v3 = 追加「心锚文案里塞着历史演示任务名」的清洗
+ *      （旧兜底模板 `昨日「${任务名}」还悬着…` 会把假任务名带进心锚，
+ *      一条 v2 已放行的旧心锚因此可能继续挂着 —— 必须重跑一次把它扫掉）。
  */
 const CACHE_SCHEMA_KEY = "flowmirror:cache-schema";
-const CACHE_SCHEMA_VERSION = "2";
+const CACHE_SCHEMA_VERSION = "3";
 
 /**
  * 旧版演示任务的 id（`task-01` ~ `task-08`）。
@@ -120,6 +123,18 @@ function isLegacySeedTask(t: LooseTask | null | undefined): boolean {
   if (typeof t.id === "string" && LEGACY_SEED_IDS.has(t.id)) return true;
   if (typeof t.title === "string" && LEGACY_SEED_TITLES.has(t.title.trim())) return true;
   return false;
+}
+
+/**
+ * 标题是否属于历史演示数据。
+ *
+ * 供**渲染/生成路径**做最后一道防线：本地缓存能靠 `purgeLegacySeedData` 清掉，
+ * 但**云端**若曾同步过这批任务，清洗是够不着的（本模块不碰云端）。
+ * 于是当晨间心锚要挑"昨天没做完的第一条任务"时，先把这批已知假标题剔掉 ——
+ * 宁可少一条素材，也不让一个用户从没建过的任务名出现在心锚文案里。
+ */
+export function isLegacySeedTitle(title: string): boolean {
+  return LEGACY_SEED_TITLES.has(title.trim());
 }
 
 /** 读取并解析一个键；非数组一律当作「没有」 */
@@ -258,6 +273,12 @@ export function purgeLegacySeedData(): PurgeReport {
   }
 
   // ---- 5. 预置心锚：删掉写着兜底文案的那几条 ----
+  //
+  // 判据有两条，**任一命中即删**：
+  //   a) 文案里含旧版写死的兜底句式（如「不等状态，先动十分钟」）；
+  //   b) 文案里含任意一个历史演示任务名 —— 旧兜底模板
+  //      `昨日「${任务名}」还悬着…` 会把假任务名原样写进心锚，
+  //      于是卡片上一直挂着一个用户从没建过的任务。这种心锚同样不是用户写的。
   const anchors = readArray(ANCHOR_SNAPSHOT_KEY);
   if (anchors) {
     const kept = anchors.filter((a) => {
@@ -266,7 +287,13 @@ export function purgeLegacySeedData(): PurgeReport {
       const haystack = `${typeof entry.slogan === "string" ? entry.slogan : ""}${
         typeof entry.action === "string" ? entry.action : ""
       }`;
-      return !LEGACY_ANCHOR_NEEDLES.some((needle) => haystack.includes(needle));
+      if (LEGACY_ANCHOR_NEEDLES.some((needle) => haystack.includes(needle))) return false;
+      if (LEGACY_SEED_TITLES.size > 0) {
+        for (const title of LEGACY_SEED_TITLES) {
+          if (haystack.includes(title)) return false;
+        }
+      }
+      return true;
     });
     report.removedAnchors = anchors.length - kept.length;
     if (report.removedAnchors > 0) {

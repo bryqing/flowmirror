@@ -7,20 +7,27 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { anchorRepo, dateLabel, localDateKey } from "@/lib/anchor-repository";
+import { isLegacySeedTitle } from "@/lib/legacy-purge";
 import { useAiStream } from "@/lib/use-ai-stream";
 import type { MorningAnchorEntry } from "@/lib/types";
 
 /**
  * 晨间心锚（Morning Anchor）
  * - 每日一条，按本地日期 key（YYYY-MM-DD）读取/保存
- * - 无记录时挂载后自动调用 AI 凝练（依据昨日之镜 + 今日任务）
+ * - 无记录时挂载后自动调用 AI 凝练（依据**昨日真实任务**：未完成项 / 休闲娱乐时长 / 踩坑教训）
  * - 右上角提供「重 roll」「编辑」，支持手动改写后落库
  *
- * ⚠️ **不允许有任何写死的兜底文案。**
- * 早先版本在 AI 与存储都不可用时，会展示并**落库**一条预置心锚
- * （"不等状态，先动十分钟"），source 记为 `"seed"`。那是一条编出来的话，
- * 却和用户自己写的心锚长得一模一样 —— 用户会以为那是自己的今日锚点。
- * 现在改成：凝练不出来就诚实地空着，给一个明确的「生成今日心锚」按钮。
+ * ⚠️ **不允许有任何写死的兜底文案，也不允许引用用户没建过的任务。**
+ * 早先版本有三重编造来源，现在全部拔掉：
+ *   1) 客户端在 AI 与存储都不可用时展示并**落库**一条预置心锚
+ *      （"不等状态，先动十分钟"），source 记为 `"seed"`；
+ *   2) 服务端 `morning-anchor` 路由在模型抽风时补一条写死的 `fallback`，
+ *      模板形如 `昨日「${任务名}」还悬着——…`，把任务名硬塞进文案；
+ *   3) 客户端把**今日**任务当作「昨日未完成」发给模型（字段名与语义不符），
+ *      于是一旦今日列表里混进过历史脏任务，心锚就永久带着那个陌生任务名。
+ *
+ * 现在：没有事实依据就诚实空着（纯净空态 + 明确的「生成今日心锚」按钮），
+ * 有依据才凝练，且引用的任务名一律来自 `yesterdayTasks` 并经过黑名单过滤。
  *
  * 状态机（loadState）：
  *   "idle"     → 尚未开始（SSR / 未挂载）
@@ -33,7 +40,7 @@ import type { MorningAnchorEntry } from "@/lib/types";
 type LoadState = "idle" | "loading" | "generating" | "ready" | "error";
 
 export function MorningAnchor() {
-  const { tasks, pushToast } = useFlow();
+  const { yesterdayTasks, pushToast } = useFlow();
 
   // 挂载保护：日期标签含 new Date()，SSR 与客户端可能跨日/跨时区 → 先渲染占位
   const [mounted, setMounted] = useState(false);
@@ -55,19 +62,32 @@ export function MorningAnchor() {
 
   const loading = loadState === "loading" || loadState === "generating";
 
-  /** 组装 AI 输入：昨日未完成任务 / 黑洞时长 / 踩坑教训 */
+  /**
+   * 组装 AI 输入：**昨日**未完成任务 / 昨日休闲娱乐时长 / 昨日踩坑教训。
+   *
+   * ⚠️ 这里必须取 `yesterdayTasks`，不能取 `tasks`（今日看板）。
+   * 早先版本就是从今日任务里挑未完成项、却当作「昨日未完成」发给模型，
+   * 于是心锚张口就是"昨天那件事还悬着"，而它指的其实是今天才建的条目 ——
+   * 而且一旦今日列表里混进过历史脏任务，那句话就永远带着那个陌生任务名。
+   *
+   * 另外再做一道**黑名单过滤**：本地缓存已由 `purgeLegacySeedData` 清洗，
+   * 但云端曾同步过的演示任务它够不着，所以在这里把已知的假标题剔掉，
+   * 保证心锚引用的任务名一定是用户自己建的。
+   */
   const buildContext = useCallback(
     (key: string, labelText: string) => {
-      const unfinished = tasks
+      const real = yesterdayTasks.filter((t) => !isLegacySeedTitle(t.title));
+      const unfinished = real
         .filter((t) => t.status === "pending" || t.status === "in-progress")
         .map((t) => t.title);
-      const blackholeTasks = tasks.filter((t) => t.category === "blackhole");
+      const blackholeTasks = real.filter((t) => t.category === "blackhole");
       const blackholeMinutes = blackholeTasks.reduce(
         (sum, t) => sum + (t.actualDuration ?? t.blackholeMinutes ?? t.plannedDuration ?? 0),
         0,
       );
-      const lessons = tasks.flatMap((t) =>
-        t.pitfalls.map((p) => ({ taskTitle: t.title, text: p })),
+      const lessons = real.flatMap((t) =>
+        // `pitfalls` 来自外部存储，可能缺失 —— 直接 .map 会整页白屏
+        (t.pitfalls ?? []).map((p) => ({ taskTitle: t.title, text: p })),
       );
       const now = new Date();
       return {
@@ -78,7 +98,7 @@ export function MorningAnchor() {
         now: `${labelText} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
       };
     },
-    [tasks],
+    [yesterdayTasks],
   );
 
   /** 解析 AI 返回的 JSON（容错：剥 ```json 包裹 + 截取首尾花括号） */
@@ -217,20 +237,21 @@ export function MorningAnchor() {
       }
 
       /**
-       * 2) 无记录：**只有当天确实有内容可依据时才自动凝练**。
+       * 2) 无记录：**只有昨天确实留下过记录时才自动凝练**。
        *
-       * 完全空白的一天（一条任务都没有、也没有任何复盘）不该被"自动拼凑"出
-       * 一条心锚 —— 那等于系统替用户编了一句他从没写过的今日方针，
-       * 和早先写死的预置心锚是同一类问题，只是换成了 AI 来编（`buildContext`
-       * 此时送过去的全是空数组，模型只能凭空发挥）。
+       * 心锚的立论基础是「昨日卡点 + 今日时间锚点」。昨天一片空白时，
+       * `buildContext` 送过去的全是空数组，模型没有任何事实可依 ——
+       * 它只能**凭空编一个卡点**，而编出来的东西会带着一个用户从没建过的
+       * 任务名落在卡片最上方，和早先写死的预置心锚是同一类问题，
+       * 只是换成 AI 来编而已。
        *
        * 所以这里停在纯净空态，把决定权交给用户：下方备有「生成今日心锚」
-       * 与「自己写」两条出口，点一下照样能拿到 AI 凝练的结果。
+       * 与「自己写」两条出口。
        *
-       * ⚠️ 刻意**不置** `bootstrapRef`：任务稍后才从本地快照/云端加载进来时，
-       * 本 effect 会因 `tasks` 变化重跑，那时数据齐了再自动凝练。
+       * ⚠️ 刻意**不置** `bootstrapRef`：`yesterdayTasks` 是异步装载的，
+       * 快照/云端数据到齐后本 effect 会重跑，那时再判断要不要凝练。
        */
-      if (tasks.length === 0) {
+      if (yesterdayTasks.length === 0) {
         setLoadState("ready");
         return;
       }
@@ -241,7 +262,7 @@ export function MorningAnchor() {
     return () => {
       cancelled = true;
     };
-  }, [dateKey, generateWith, tasks]);
+  }, [dateKey, generateWith, yesterdayTasks]);
 
   const startEdit = () => {
     if (!anchor) return;
@@ -287,7 +308,10 @@ export function MorningAnchor() {
   const showGenerating = loadState === "generating" && !displaySlogan;
 
   return (
-    <section className="glass animate-fade-up group relative overflow-hidden rounded-2xl p-5 sm:p-6">
+    <section
+      data-anchor-card
+      className="glass animate-fade-up group relative overflow-hidden rounded-2xl p-5 sm:p-6"
+    >
       <div className="pointer-events-none absolute -right-10 -top-14 size-44 rounded-full bg-cat-deep/[0.07] blur-3xl" />
 
       <div className="flex items-start gap-3.5">
@@ -392,11 +416,14 @@ export function MorningAnchor() {
             </div>
           ) : displaySlogan ? (
             <>
-              <h2 className="mt-1.5 text-lg font-light leading-snug tracking-tight sm:text-xl">
+              <h2
+                data-anchor-slogan
+                className="mt-1.5 text-lg font-light leading-snug tracking-tight sm:text-xl"
+              >
                 {displaySlogan}
               </h2>
               {displayAction && (
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                <p data-anchor-action className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
                   {displayAction}
                 </p>
               )}
@@ -404,9 +431,10 @@ export function MorningAnchor() {
           ) : (
             /* 纯净空态：没有心锚就不摆任何预设文案，只给两条出口 */
             <div className="mt-2.5 flex flex-col gap-2.5" data-anchor-empty>
-              <p className="text-sm font-light text-slate-500">今日还没有心锚</p>
+              <p className="text-sm font-light text-slate-500">今天还没有心锚</p>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                让 AI 依据昨日之镜与今日任务凝练一条，或者自己写一句今天要守住的动作。
+                让 AI 依据昨日的真实记录凝练一条行动锚点；昨天没有留下记录也没关系，
+                写一句今天要守住的动作，就已经算开始了。
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button
