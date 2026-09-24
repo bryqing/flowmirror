@@ -53,14 +53,14 @@ const EMPTY_MIRROR: Omit<DayMirror, "dateLabel"> = {
 
 /** 汇总某一板块的当日总时长（分钟）：真实记录优先，其次计划时长 */
 function categoryMinutes(tasks: Task[], category: Task["category"]): number {
-  return tasks
+  return (tasks ?? [])
     .filter((t) => t.category === category)
     .reduce((sum, t) => sum + effectiveMinutes(t), 0);
 }
 
 /** 由真实任务派生黑洞切片（含失控判定：实际跨度超出计划时长即为失控段） */
 function blackholeSlicesOf(tasks: Task[]): TimeSlice[] {
-  return tasks
+  return (tasks ?? [])
     .filter((t) => t.category === "blackhole")
     .map((task) => {
       const w = taskWindow(task);
@@ -70,7 +70,7 @@ function blackholeSlicesOf(tasks: Task[]): TimeSlice[] {
       const slice: TimeSlice = {
         start: minutesToClock(w.start),
         end: minutesToClock(w.end),
-        label: task.title,
+        label: String(task.title ?? ""),
         runaway: planned > 0 && minutes > planned,
       };
       return slice;
@@ -79,14 +79,19 @@ function blackholeSlicesOf(tasks: Task[]): TimeSlice[] {
     .sort((a, b) => a.start.localeCompare(b.start));
 }
 
-/** 由真实微复盘派生「踩坑教训」（有卡点或笔记的才算一条） */
+/**
+ * 由真实微复盘派生「踩坑教训」（有卡点或笔记的才算一条）。
+ *
+ * `microReviews` 与 `note` 都来自外部存储，运行时**不保证存在**：
+ * 一条跨版本遗留的记录缺这个字段，`for...of` 就会在渲染期抛错并卸载整棵树。
+ */
 function lessonsOf(tasks: Task[]): { taskTitle: string; text: string }[] {
   const lessons: { taskTitle: string; text: string }[] = [];
-  for (const task of tasks) {
-    for (const review of task.microReviews) {
-      const text = review.note.trim();
+  for (const task of tasks ?? []) {
+    for (const review of task.microReviews ?? []) {
+      const text = String(review?.note ?? "").trim();
       if (!text) continue;
-      lessons.push({ taskTitle: task.title, text });
+      lessons.push({ taskTitle: String(task.title ?? ""), text });
     }
   }
   return lessons;
@@ -120,26 +125,28 @@ function blackholeCommentOf(slices: TimeSlice[], totalMinutes: number): string {
  */
 export function buildDayMirror(tasks: Task[], dateKey: string): DayMirrorResult {
   const dateLabel = fmtDateLabel(dateKey);
-  const isReal = tasks.length > 0;
+  // 唯一归一化点：后面全部走这个局部变量，不在每个分支各写一遍 ?? []
+  const list = Array.isArray(tasks) ? tasks : [];
+  const isReal = list.length > 0;
 
   // 无记录：干净的零值，没有可回退的"示例"
   if (!isReal) {
     return { mirror: { ...EMPTY_MIRROR, dateLabel }, isReal: false };
   }
 
-  const totalCount = tasks.length;
-  const doneCount = tasks.filter((t) => t.status === "done").length;
+  const totalCount = list.length;
+  const doneCount = list.filter((t) => t.status === "done").length;
   const completionRate = totalCount > 0 ? doneCount / totalCount : 0;
-  const deepWorkMinutes = categoryMinutes(tasks, "deep-work");
-  const blackholeMinutes = categoryMinutes(tasks, "blackhole");
-  const blackholeSlices = blackholeSlicesOf(tasks);
-  const lessons = lessonsOf(tasks);
+  const deepWorkMinutes = categoryMinutes(list, "deep-work");
+  const blackholeMinutes = categoryMinutes(list, "blackhole");
+  const blackholeSlices = blackholeSlicesOf(list);
+  const lessons = lessonsOf(list);
 
   /** 与数字自洽的总体评述 */
   const parts = [`完成率 ${Math.round(completionRate * 100)}%，${doneCount}/${totalCount} 项完成`];
   if (deepWorkMinutes > 0) parts.push(`紧急重要 ${fmtDuration(deepWorkMinutes)}`);
   if (blackholeMinutes > 0) parts.push(`休闲娱乐 ${fmtDuration(blackholeMinutes)}`);
-  const unfinished = tasks.filter((t) => t.status === "pending" || t.status === "in-progress").length;
+  const unfinished = list.filter((t) => t.status === "pending" || t.status === "in-progress").length;
   if (unfinished > 0) parts.push(`未完成 ${unfinished} 项`);
   let overallComment = `${parts.join(" · ")}。`;
 

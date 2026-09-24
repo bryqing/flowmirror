@@ -1,4 +1,4 @@
-import type { Task } from "./types";
+import { coerceTaskCategory, coerceTaskStatus, type Task } from "./types";
 import { getSupabase, isSupabaseConfigured } from "./supabase";
 
 /**
@@ -29,13 +29,20 @@ export interface TaskRepository {
   deleteTask(id: string): Promise<boolean>;
 }
 
-/** 远端 Supabase 行 → 前端 Task 模型 */
+/**
+ * 远端 Supabase 行 → 前端 Task 模型。
+ *
+ * ⚠️ 这里是**云端数据进前端的唯一闸口**，所有可选字段都必须在这里落定：
+ * 数组字段补 `[]`，两个枚举字段过 `coerce*`。少补一个，那条记录就会带着
+ * undefined 一路走到渲染层，在某个 `.length` / 查表处把整棵树带走
+ * （表现为"线上整页白屏"，而根因只是数据库里一行缺字段的历史数据）。
+ */
 function rowToTask(row: Record<string, unknown>): Task {
   return {
     id: String(row.id),
-    title: String(row.title),
-    status: row.status as Task["status"],
-    category: row.category as Task["category"],
+    title: String(row.title ?? ""),
+    status: coerceTaskStatus(row.status),
+    category: coerceTaskCategory(row.category),
     scheduledTime: (row.scheduled_time as string) ?? undefined,
     plannedDuration: (row.planned_duration as number) ?? undefined,
     actualDuration: (row.actual_duration as number) ?? undefined,

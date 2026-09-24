@@ -53,7 +53,9 @@ export function BlackholeDetailDrawer({
     }
   }, [open, focusIndex]);
 
-  const slices = mirror.blackholeSlices;
+  // `${mirror.blackholeSlices ?? []}`：镜像对象正常都带数组，但抽屉是"点一下
+  // 就打开"的路径，这里多一道默认值，代价为零、换来的是它永不成为崩溃点。
+  const slices = mirror.blackholeSlices ?? [];
 
   /**
    * 关联该切片的踩坑教训：用双向关键词包含匹配。

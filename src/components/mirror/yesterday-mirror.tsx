@@ -26,7 +26,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { BlackholeDetailDrawer } from "./blackhole-detail-drawer";
 import { buildDayMirror } from "@/lib/mirror";
 import { effectiveMinutes, fmtDateLabel, windowLabel } from "@/lib/task-time";
-import { CATEGORY_META, type TaskStatus } from "@/lib/types";
+import { categoryMetaOf, type TaskStatus } from "@/lib/types";
 import { cn, fmtDuration } from "@/lib/utils";
 
 /**
@@ -410,7 +410,9 @@ export function YesterdayMirror() {
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 pt-0">
         {mirrorTasks.map((task) => {
-          const status = STATUS_META[task.status];
+          // 状态 / 分类都可能读到历史脏值 —— 查表一律走兜底，绝不让 undefined 落到 JSX 里
+          const status = STATUS_META[task.status] ?? STATUS_META.pending;
+          const categoryMeta = categoryMetaOf(task.category);
           const window = windowLabel(task);
           const minutes = effectiveMinutes(task);
           return (
@@ -447,8 +449,8 @@ export function YesterdayMirror() {
                 {status.label}
               </span>
               <span
-                className={cn("size-1.5 shrink-0 rounded-full", CATEGORY_META[task.category].dot)}
-                title={CATEGORY_META[task.category].label}
+                className={cn("size-1.5 shrink-0 rounded-full", categoryMeta.dot)}
+                title={categoryMeta.label}
               />
             </div>
           );

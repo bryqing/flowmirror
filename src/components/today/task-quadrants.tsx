@@ -212,16 +212,7 @@ export function TaskQuadrants({ mode = "battle" }: { mode?: "battle" | "backlog"
                 </p>
               )}
               {mounted && list.length === 0 && (
-                <p
-                  data-quadrant-empty={category}
-                  className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-100 px-3 py-6 text-center text-[11px] leading-relaxed text-slate-400"
-                >
-                  {isBacklog
-                    ? "池子还空着 · 把「以后再说」的事丢进来"
-                    : isViewingToday
-                      ? "今日暂无安排，点击上方或下方添加"
-                      : "这一天暂无安排"}
-                </p>
+                <EmptyQuadrantPlaceholder category={category} isBacklog={isBacklog} isViewingToday={isViewingToday} />
               )}
               {mounted && list.map(renderChip)}
 
@@ -262,6 +253,39 @@ export function TaskQuadrants({ mode = "battle" }: { mode?: "battle" | "backlog"
         );
       })}
     </div>
+  );
+}
+
+/**
+ * 象限空态占位。
+ *
+ * 单独抽成一个组件，是因为它承担的是**结构性职责**而不是一句文案：
+ * 只要 `list.length === 0`，这个象限就必须渲染出一个稳定的占位节点 ——
+ * 既不读取首项数据、也不假设数组里有东西。0 条数据是正常状态（新日期、
+ * 新账号、刚清空），绝不能让它变成抛错路径。
+ *
+ * `data-quadrant-empty` 是自动化断言的稳定锚点，不要去掉。
+ */
+function EmptyQuadrantPlaceholder({
+  category,
+  isBacklog,
+  isViewingToday,
+}: {
+  category: TaskCategory;
+  isBacklog: boolean;
+  isViewingToday: boolean;
+}) {
+  return (
+    <p
+      data-quadrant-empty={category}
+      className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-100 px-3 py-6 text-center text-[11px] leading-relaxed text-slate-400"
+    >
+      {isBacklog
+        ? "池子还空着 · 把「以后再说」的事丢进来"
+        : isViewingToday
+          ? "今日暂无安排，点击上方或下方添加"
+          : "这一天暂无安排"}
+    </p>
   );
 }
 
@@ -708,7 +732,7 @@ function TaskChip({
           </span>
         )}
 
-        {done && task.microReviews.length > 0 && (
+        {done && (task.microReviews ?? []).length > 0 && (
           <span className="shrink-0 rounded bg-cat-rest/15 px-1 py-px text-[9px] text-cat-rest">已复盘</span>
         )}
       </div>

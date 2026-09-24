@@ -21,7 +21,9 @@ import {
   CATEGORY_META,
   QUADRANT_META,
   QUADRANT_ORDER,
+  categoryMetaOf,
   categoryToQuadrant,
+  coerceTaskCategory,
   type Quadrant,
   type Task,
 } from "@/lib/types";
@@ -83,6 +85,9 @@ export function TaskDetailDrawer() {
     if (!detailTask) return;
     finishedRef.current = false;
     if (detailTask.category === "blackhole" && detailTask.status === "in-progress") {
+      // 黑洞任务打开即自动起倒计时 —— 计时器状态本就由"打开哪条任务"这个
+      // 外部输入决定，与全站同类 effect 一致地豁免该规则。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       startTimer(detailTask.blackholeMinutes ?? 30);
     } else {
       setTimer("idle");
@@ -121,7 +126,8 @@ export function TaskDetailDrawer() {
     return <Sheet open={false} onClose={closeDetail} title="任务详情"><div /></Sheet>;
   }
 
-  const meta = CATEGORY_META[detailTask.category];
+  // 查表走 categoryMetaOf：任务分类读到脏值时落到兜底键，而不是让抽屉整个崩掉
+  const meta = categoryMetaOf(detailTask.category);
   const progress = totalSeconds > 0 ? 1 - secondsLeft / totalSeconds : 0;
   const timerActive = timer === "running" || timer === "paused" || timer === "finished";
 
@@ -274,14 +280,17 @@ export function TaskDetailDrawer() {
         )}
 
         {/* 战前锦囊 SOP */}
-        {detailTask.sops.length > 0 && (
+        {/* ⚠️ 以下四个区块的数组字段全部来自外部存储，运行时可能缺失：
+            抽屉是「点任意任务卡片」的必经路径，少一个 `?? []` 就等于给
+            每次点击埋一颗会卸载整棵树的雷。 */}
+        {(detailTask.sops ?? []).length > 0 && (
           <div className="flex flex-col gap-2">
             <p className="flex items-center gap-1.5 text-xs font-medium">
               <ListChecks className="size-3.5 text-cat-deep" />
               极简执行 SOP
             </p>
             <ol className="flex flex-col gap-1.5">
-              {detailTask.sops.map((sop, i) => (
+              {(detailTask.sops ?? []).map((sop, i) => (
                 <li key={i} className="flex gap-2.5 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
                   <span className="font-mono text-[10px] text-cat-deep/70">{String(i + 1).padStart(2, "0")}</span>
                   {sop}
@@ -292,23 +301,23 @@ export function TaskDetailDrawer() {
         )}
 
         {/* 历史避坑教训 */}
-        {detailTask.pitfalls.length > 0 && (
+        {(detailTask.pitfalls ?? []).length > 0 && (
           <div className="flex flex-col gap-1.5 rounded-2xl border border-candle/20 bg-candle/[0.06] p-3.5">
             <p className="flex items-center gap-1.5 text-xs font-medium text-candle">
               <AlertTriangle className="size-3.5" />
               历史避坑教训（同类任务沉淀）
             </p>
-            {detailTask.pitfalls.map((p, i) => (
+            {(detailTask.pitfalls ?? []).map((p, i) => (
               <p key={i} className="text-[11px] leading-relaxed text-candle/85">· {p}</p>
             ))}
           </div>
         )}
 
         {/* 时间切片 */}
-        {detailTask.timeSlices.length > 0 && (
+        {(detailTask.timeSlices ?? []).length > 0 && (
           <div className="flex flex-col gap-1.5">
             <p className="text-xs font-medium text-muted-foreground">今日时间切片</p>
-            {detailTask.timeSlices.map((s, i) => (
+            {(detailTask.timeSlices ?? []).map((s, i) => (
               <p key={i} className="flex items-baseline gap-2 text-[11px] text-muted-foreground">
                 <span className="font-mono text-[10px] text-subtle-foreground">
                   {s.start}{s.end ? `–${s.end}` : " 起"}
@@ -320,19 +329,19 @@ export function TaskDetailDrawer() {
         )}
 
         {/* 已有微复盘 */}
-        {detailTask.microReviews.length > 0 && (
+        {(detailTask.microReviews ?? []).length > 0 && (
           <div className="flex flex-col gap-2">
             <p className="flex items-center gap-1.5 text-xs font-medium text-cat-rest">
               <Sparkles className="size-3.5" />
               已沉淀微复盘
             </p>
-            {detailTask.microReviews.map((r) => (
+            {(detailTask.microReviews ?? []).map((r) => (
               <div key={r.id} className="rounded-xl border border-cat-rest/15 bg-cat-rest/[0.05] p-3">
                 <div className="flex flex-wrap gap-1">
-                  {r.blockerTags.map((t) => (
+                  {(r.blockerTags ?? []).map((t) => (
                     <span key={t} className="rounded bg-cat-blackhole/15 px-1.5 py-px text-[10px] text-cat-blackhole">{t}</span>
                   ))}
-                  {r.lessonTags.map((t) => (
+                  {(r.lessonTags ?? []).map((t) => (
                     <span key={t} className="rounded bg-cat-rest/15 px-1.5 py-px text-[10px] text-cat-rest">{t}</span>
                   ))}
                 </div>
@@ -366,7 +375,7 @@ export function TaskDetailDrawer() {
           <p className="text-center text-[11px] leading-relaxed text-subtle-foreground">
             撤回后任务回到「{meta.label}」
             {detailTask.category === "rest" ? "（全局待执行池）" : "（今日战局）"}，
-            可继续计时与打卡；已记录 {detailTask.timeSlices.length > 0 ? "的计时切片与" : ""}微复盘会保留。
+            可继续计时与打卡；已记录 {(detailTask.timeSlices ?? []).length > 0 ? "的计时切片与" : ""}微复盘会保留。
           </p>
         )}
       </div>
@@ -396,8 +405,8 @@ function QuadrantPicker({
   pickerRef: RefObject<HTMLDivElement | null>;
   disabled: boolean;
 }) {
-  const meta = CATEGORY_META[current];
-  const currentQuadrant = categoryToQuadrant(current);
+  const meta = categoryMetaOf(current);
+  const currentQuadrant = categoryToQuadrant(coerceTaskCategory(current));
 
   return (
     <div ref={pickerRef} className="relative inline-flex">

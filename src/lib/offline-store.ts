@@ -5,7 +5,7 @@
  * - 轻量、无依赖，符合「离线优先」设计
  */
 
-import type { Task } from "./types";
+import { coerceTaskCategory, coerceTaskStatus, type Task } from "./types";
 
 /**
  * 按日快照的键前缀（完整键 = `${SNAPSHOT_PREFIX}:${YYYY-MM-DD}`）。
@@ -107,7 +107,7 @@ export function saveSnapshot(tasks: Task[], dateKey: string): void {
 }
 
 /**
- * 补齐本地快照里可能缺失的数组字段。
+ * 补齐本地快照里可能缺失的数组字段，并校验两个枚举字段。
  *
  * localStorage 是**不可信输入**：旧版本写的快照、手工改过的数据、跨版本升级遗留的
  * 记录，都可能缺 `timeSlices` / `microReviews` 等字段。这些字段在类型上是必填的，
@@ -116,22 +116,28 @@ export function saveSnapshot(tasks: Task[], dateKey: string): void {
  * 卸载成白屏（实测：仅 1 条缺 timeSlices 的待办就足以让全站消失）。
  *
  * 远端路径已由 `rowToTask` 兜底（全部 `?? []`），这里把本地路径补齐，两侧口径一致。
+ *
+ * ⚠️ `status` / `category` 也要一起校验：它们会拿去查 `STATUS_META` /
+ * `CATEGORY_META`，读到陌生值时查表返回 undefined，紧接着的 `.dot` / `.className`
+ * 就是同一个白屏。数组字段与枚举字段缺一不可。
  */
-function normalizeTask(t: Task): Task {
+export function normalizeTask(t: Task): Task {
   return {
     ...t,
-    timeSlices: t.timeSlices ?? [],
-    microReviews: t.microReviews ?? [],
-    insights: t.insights ?? [],
-    sops: t.sops ?? [],
-    pitfalls: t.pitfalls ?? [],
+    status: coerceTaskStatus(t?.status),
+    category: coerceTaskCategory(t?.category),
+    timeSlices: t?.timeSlices ?? [],
+    microReviews: t?.microReviews ?? [],
+    insights: t?.insights ?? [],
+    sops: t?.sops ?? [],
+    pitfalls: t?.pitfalls ?? [],
   };
 }
 
 /** 快照数组归一化：非数组（脏数据）一律当作「没有快照」 */
 function normalizeTasks(list: unknown): Task[] | null {
   if (!Array.isArray(list)) return null;
-  return (list as Task[]).map(normalizeTask);
+  return list.filter((t): t is Task => Boolean(t) && typeof t === "object").map(normalizeTask);
 }
 
 /**

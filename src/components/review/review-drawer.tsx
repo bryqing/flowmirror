@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useFlow } from "@/components/flow-context";
-import { CATEGORY_META } from "@/lib/types";
+import { categoryMetaOf } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAi } from "@/lib/use-ai";
 
@@ -30,6 +30,9 @@ export function ReviewDrawer() {
   /* 每次打开新任务时重置 */
   useEffect(() => {
     if (open) {
+      // 表单清空由「是否打开 / 打开的是哪条」驱动，无法在渲染期推导；
+      // 与全站同类 effect 一致地豁免该规则。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBlockerTags([]);
       setLessonTags([]);
       setNote("");
@@ -41,7 +44,9 @@ export function ReviewDrawer() {
   }
 
   const isBlackhole = reviewTask.category === "blackhole";
-  const meta = CATEGORY_META[reviewTask.category];
+  // 查表走 categoryMetaOf：微复盘会在「打钩完成」时自动弹出，
+  // 分类读到脏值不能让这个必经路径把整棵树带崩。
+  const meta = categoryMetaOf(reviewTask.category);
   const blockers = isBlackhole ? BLACKHOLE_BLOCKER_TAGS : BLOCKER_TAGS;
   const lessons = isBlackhole ? BLACKHOLE_LESSON_TAGS : LESSON_TAGS;
 

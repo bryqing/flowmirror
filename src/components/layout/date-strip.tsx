@@ -18,8 +18,23 @@ interface DayCell {
   isToday: boolean;
 }
 
-/** `YYYY-MM-DD` → 本地 Date（0 点，避免时区偏移） */
+/** `YYYY-MM-DD` 形状校验：日期条有一堆边界计算都建立在「key 一定合法」之上 */
+function isDateKey(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+/**
+ * `YYYY-MM-DD` → 本地 Date（0 点，避免时区偏移）。
+ *
+ * 非法值退化为「今天」而不是抛错：这个函数会被 `makeCell` 用来渲染补位胶囊，
+ * 而补位胶囊的入参可能是任何东西（受控 value 由宿主板块传入）。为一个日期格式
+ * 让整棵树崩掉不成比例。
+ */
 function fromKey(key: string): Date {
+  if (!isDateKey(key)) {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
   const [y, m, d] = key.split("-").map(Number);
   return new Date(y, (m ?? 1) - 1, d ?? 1);
 }
@@ -138,7 +153,16 @@ export function DayCapsules({
 
   const days = useMemo<DayCell[]>(() => {
     const list: DayCell[] = [];
-    for (let offset = windowFrom; offset <= windowTo; offset++) {
+    /**
+     * 窗口边界先归一化：`windowFrom > windowTo`（宿主板块传参写反）会让循环一次
+     * 都不执行，`days` 变成空数组 —— 下游拿 `days[0].key` 比较就会抛
+     * `Cannot read properties of undefined (reading 'key')` 并卸载整棵树。
+     * 日期条是三条并存的通用组件，不能假设调用方永远传对。
+     */
+    const from = Number.isFinite(windowFrom) ? windowFrom : -1;
+    const toRaw = Number.isFinite(windowTo) ? windowTo : 5;
+    const to = toRaw < from ? from : toRaw;
+    for (let offset = from; offset <= to; offset++) {
       const d = new Date();
       d.setDate(d.getDate() + offset);
       list.push(
@@ -148,11 +172,14 @@ export function DayCapsules({
     return list;
   }, [today, windowFrom, windowTo]);
 
-  // 选中日期不在胶囊窗口内 → 额外渲染一颗，放在窗口的左侧（更早）或右侧（更晚）
-  const outsideSelected = !days.some((d) => d.key === activeDate);
+  /**
+   * 选中日期不在胶囊窗口内 → 额外渲染一颗，放在窗口的左侧（更早）或右侧（更晚）。
+   * 只有在选中日期确实是合法 key 时才补位，否则界面会多出一颗指向"今天"的假胶囊。
+   */
+  const outsideSelected = isDateKey(activeDate) && !days.some((d) => d.key === activeDate);
   const selectedCell = outsideSelected ? makeCell(activeDate, today) : null;
   // `YYYY-MM-DD` 的字典序即时间序，可直接比较
-  const selectedIsEarlier = outsideSelected && activeDate < days[0].key;
+  const selectedIsEarlier = outsideSelected && days.length > 0 && activeDate < days[0].key;
 
   const renderCell = (d: DayCell) => {
     const active = activeDate === d.key;

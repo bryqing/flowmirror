@@ -11,8 +11,12 @@
  * 长期留着那份旧构建。升级版本号会强制丢弃所有旧 cache，
  * 配合 `src/lib/legacy-purge.ts` 清洗 localStorage，
  * 确保"源码已删掉的假数据"不会靠缓存继续活着。
+ *
+ * ⚠️ v6：配合渲染层空值加固一起发布。旧 bundle 里的任务数组访问没有默认值，
+ * 一条缺字段的历史记录就能把整棵树渲染崩掉（线上表现为整页白屏 + 启动看门狗告警）。
+ * 提版本号确保所有回访用户拿到的都是已加固的那份 bundle，而不是缓存里的旧版。
  */
-const CACHE_VERSION = "v5";
+const CACHE_VERSION = "v6";
 const SHELL_CACHE = `flowmirror-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `flowmirror-runtime-${CACHE_VERSION}`;
 
@@ -105,9 +109,18 @@ function offlineResponse() {
 async function networkFirstNavigation(req) {
   try {
     const fresh = await fetch(req);
-    // 同步更新 shell 缓存
-    const cache = await caches.open(SHELL_CACHE);
-    cache.put("/", fresh.clone()).catch(() => {});
+    /**
+     * ⚠️ 只缓存**成功的**文档，绝不把错误页写进 shell。
+     *
+     * 早先这里无条件 `cache.put("/", fresh.clone())`：Netlify 冷启动失败、
+     * 函数超时或 5xx 时，那一页错误 HTML 会被当成应用外壳缓存下来 ——
+     * 之后每次离线/请求失败都拿它顶替首页，用户看到的是一个永远好不了的页面，
+     * 而清缓存前刷新多少次都没用。缓存的前提是"这份内容值得当外壳"。
+     */
+    if (fresh.ok) {
+      const cache = await caches.open(SHELL_CACHE);
+      cache.put("/", fresh.clone()).catch(() => {});
+    }
     return fresh;
   } catch {
     // 离线：回退到缓存的首页

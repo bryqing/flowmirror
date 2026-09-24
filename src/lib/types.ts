@@ -345,3 +345,63 @@ export const CATEGORY_META: Record<
     dot: "bg-cat-blackhole",
   },
 };
+
+/* ============================================================
+   查表安全兜底 —— 渲染层取元数据时的唯一入口
+   ============================================================ */
+
+/**
+ * 四个合法内部键，顺序即展示顺序（q1 → q4）。
+ * 由 QUADRANT_META 派生，`category` 与象限的对应关系只此一处。
+ */
+export const TASK_CATEGORY_ORDER: TaskCategory[] = QUADRANT_ORDER.map(
+  (q) => QUADRANT_META[q].category
+);
+
+/** 内部键是否合法 */
+export function isTaskCategory(value: unknown): value is TaskCategory {
+  return typeof value === "string" && (TASK_CATEGORY_ORDER as string[]).includes(value);
+}
+
+/** 全部合法状态 */
+const TASK_STATUS_ORDER: TaskStatus[] = ["pending", "in-progress", "done", "frozen"];
+
+/** 状态是否合法 */
+export function isTaskStatus(value: unknown): value is TaskStatus {
+  return typeof value === "string" && (TASK_STATUS_ORDER as string[]).includes(value);
+}
+
+/**
+ * 未知分类的兜底键 = q2 日常工作。
+ *
+ * 选它的理由：它是四个板块里**唯一不带任何特殊机制**的一个（q1 有卡点强调、
+ * q3 是全局常驻池、q4 有倒计时刹车），把一条读不出分类的脏数据临时放进这里，
+ * 既不会让它掉出所有象限而"凭空消失"，也不会误触发某个机制。
+ */
+export const FALLBACK_CATEGORY: TaskCategory = "chore";
+
+/** 内部键归一化：读到非法值时落到兜底键，绝不把 undefined 传给查表 */
+export function coerceTaskCategory(value: unknown): TaskCategory {
+  return isTaskCategory(value) ? value : FALLBACK_CATEGORY;
+}
+
+/** 状态归一化：读到非法值时落到「待办」（未完成是安全的默认语义） */
+export function coerceTaskStatus(value: unknown): TaskStatus {
+  return isTaskStatus(value) ? value : "pending";
+}
+
+/**
+ * `CATEGORY_META` 的安全查表。
+ *
+ * ⚠️ 为什么必须有它：`CATEGORY_META[task.category].dot` 这种写法在
+ * `task.category` 是 undefined / 陌生字符串时会抛
+ * `TypeError: Cannot read properties of undefined (reading 'dot')`。
+ * 渲染期抛错 = React 卸载整棵树 = **整站白屏**（没有 error.tsx 时连兜底都没有），
+ * 而触发条件可能只是**一条**跨版本遗留或云端异常的历史记录。
+ * 所有从外部数据取分类再查表的地方，一律走这里。
+ */
+export function categoryMetaOf(
+  category: unknown
+): (typeof CATEGORY_META)[TaskCategory] {
+  return CATEGORY_META[coerceTaskCategory(category)];
+}

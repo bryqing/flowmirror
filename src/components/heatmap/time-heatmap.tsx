@@ -116,23 +116,32 @@ export function TimeHeatmap() {
           {/* 24 格热力条：整体透明度 70%，退居次位不喧宾夺主 */}
           <div>
             <div className="grid grid-cols-[repeat(24,minmax(0,1fr))] gap-[3px] opacity-70">
-              {data.hours.map((h) => (
-                <div
-                  key={h.hour}
-                  data-heatmap-hour={h.hour}
-                  data-heatmap-cat={h.category ?? ""}
-                  data-heatmap-intensity={h.intensity}
-                  title={`${String(h.hour).padStart(2, "0")}:00 · ${
-                    h.category ? `${CATEGORY_META[h.category].label}（强度 ${h.intensity}）` : "无安排"
-                  }`}
-                  className={cn(
-                    "h-9 rounded-[5px] transition-transform duration-150 hover:scale-y-110 sm:h-11",
-                    h.category === null && "bg-slate-50",
-                    h.category && h.intensity > 0 && CELL_COLOR[h.category][h.intensity - 1],
-                    h.category === "blackhole" && h.intensity === 3 && "animate-pulse-dot"
-                  )}
-                />
-              ))}
+              {data.hours.map((h) => {
+                /**
+                 * 色带与图例都按四个合法键查表，所以这里的分类必须先确认合法。
+                 * `deriveHeatmap` 已把非法分类的记录整条跳过（不猜不补），
+                 * 这里再解析一次色阶，保证 `CELL_COLOR[c][intensity-1]` 永不落空。
+                 */
+                const ramp = h.category ? CELL_COLOR[h.category] : undefined;
+                const cellTone = ramp?.[h.intensity - 1];
+                return (
+                  <div
+                    key={h.hour}
+                    data-heatmap-hour={h.hour}
+                    data-heatmap-cat={h.category ?? ""}
+                    data-heatmap-intensity={h.intensity}
+                    title={`${String(h.hour).padStart(2, "0")}:00 · ${
+                      h.category ? `${CATEGORY_META[h.category].label}（强度 ${h.intensity}）` : "无安排"
+                    }`}
+                    className={cn(
+                      "h-9 rounded-[5px] transition-transform duration-150 hover:scale-y-110 sm:h-11",
+                      h.category === null && "bg-slate-50",
+                      cellTone,
+                      h.category === "blackhole" && h.intensity === 3 && "animate-pulse-dot"
+                    )}
+                  />
+                );
+              })}
             </div>
             <div className="mt-1.5 flex justify-between font-mono text-[10px] text-subtle-foreground">
               <span>00</span>

@@ -13,6 +13,8 @@ import {
 import {
   QUADRANT_META,
   coerceQuadrant,
+  coerceTaskCategory,
+  coerceTaskStatus,
   quadrantToCategory,
   type MicroReview,
   type ParsedCommand,
@@ -1309,7 +1311,11 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       commitTask({
         ...target,
         status: "in-progress",
-        timeSlices: [...target.timeSlices, { start: nowClock(), end: "", label: target.title }],
+        // 目标任务的切片数组可能缺失（历史脏数据），先补空数组再追加
+        timeSlices: [
+          ...(target.timeSlices ?? []),
+          { start: nowClock(), end: "", label: target.title },
+        ],
       });
       pushToast(`开始计时 · ${target.title}`, "info");
     },
@@ -1321,9 +1327,10 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       const target = findTask(id);
       if (!target) return;
-      const index = target.timeSlices.findIndex((s) => Boolean(s.start) && !s.end);
+      const slices = target.timeSlices ?? [];
+      const index = slices.findIndex((s) => Boolean(s.start) && !s.end);
       if (index < 0) return;
-      const closed = target.timeSlices.map((s, i) =>
+      const closed = slices.map((s, i) =>
         i === index ? { ...s, end: nowClock() } : s
       );
       const recorded = sumSliceMinutes(closed);
@@ -1357,7 +1364,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       };
       // 走 commitTask：待执行池里的任务同样能挂微复盘（它也是个任务，只是没有归属日）
       const target = findTask(id);
-      if (target) commitTask({ ...target, microReviews: [...target.microReviews, full] });
+      if (target) commitTask({ ...target, microReviews: [...(target.microReviews ?? []), full] });
       setReviewTaskId(null);
       pushToast("微复盘已入库，经验卡片 +1", "success");
     },
@@ -1931,9 +1938,11 @@ function translateAuthError(message: string): string {
 function rowToTaskLocal(row: Record<string, unknown>): Task {
   return {
     id: String(row.id),
-    title: String(row.title),
-    status: row.status as Task["status"],
-    category: row.category as Task["category"],
+    title: String(row.title ?? ""),
+    // 枚举字段走 coerce：Realtime 推来的行同样可能带陌生值，
+    // 而它落地后立刻参与渲染（查表 → 取色/取文案），脏值就是白屏
+    status: coerceTaskStatus(row.status),
+    category: coerceTaskCategory(row.category),
     scheduledTime: (row.scheduled_time as string) ?? undefined,
     plannedDuration: (row.planned_duration as number) ?? undefined,
     actualDuration: (row.actual_duration as number) ?? undefined,

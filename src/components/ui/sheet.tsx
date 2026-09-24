@@ -30,6 +30,9 @@ export function Sheet({ open, onClose, children, title }: SheetProps) {
 
   useEffect(() => {
     if (open) {
+      // 抽屉的挂载/退场动画状态机：必须由 open 这个外部输入驱动，
+      // 不是在渲染期能推导出来的派生值。与全站其它同类 effect 一致地豁免该规则。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setMounted(true);
       setClosing(false);
     } else if (mounted) {

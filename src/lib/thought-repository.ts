@@ -73,8 +73,29 @@ function thoughtToRow(t: Partial<Thought>): Record<string, unknown> {
 
 // ---- 本地降级存储 ----
 
+/**
+ * 补齐本地灵感的字段。localStorage 是**不可信输入**：
+ * 旧版本写的快照可能缺 `tags`（甚至整个对象不是对象）。
+ * 渲染层会直接 `for (const tag of t.tags)`，一条缺字段的记录就足以让
+ * React 卸载整棵树 —— 所以读取路径必须先把形状补齐。
+ */
+function normalizeThought(t: Thought): Thought {
+  return {
+    ...t,
+    content: String(t?.content ?? ""),
+    aiExpansion: String(t?.aiExpansion ?? ""),
+    createdAt: String(t?.createdAt ?? ""),
+    date: String(t?.date ?? ""),
+    tags: Array.isArray(t?.tags) ? t.tags.filter((x) => typeof x === "string") : [],
+  };
+}
+
 function loadLocal(): Thought[] {
-  return safeGet<Thought[]>(SNAPSHOT_KEY) ?? [];
+  const raw = safeGet<Thought[]>(SNAPSHOT_KEY);
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((t): t is Thought => Boolean(t) && typeof t === "object")
+    .map(normalizeThought);
 }
 
 function saveLocal(list: Thought[]): void {

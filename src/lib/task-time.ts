@@ -20,6 +20,7 @@
 import {
   QUADRANT_META,
   QUADRANT_ORDER,
+  isTaskCategory,
   type HeatmapData,
   type HeatmapHour,
   type Task,
@@ -54,30 +55,43 @@ export function toMinutes(clock?: string): number | null {
   return n;
 }
 
-/** 某个切片是否为「正在进行中」（有开始时间、还没结束） */
-export function isOpenSlice(slice: TimeSlice): boolean {
-  return Boolean(slice.start) && !slice.end;
+/**
+ * 某个切片是否为「正在进行中」（有开始时间、还没结束）。
+ *
+ * ⚠️ 入参放宽为 unknown：`timeSlices` 数组来自 localStorage / Supabase，
+ * 元素本身也可能是 null（手工改过的数据、跨版本升级遗留）。一条坏切片
+ * 在渲染期抛错就足以让 React 卸载整棵树，所以这里先做形状检查。
+ */
+export function isOpenSlice(slice: unknown): boolean {
+  if (!slice || typeof slice !== "object") return false;
+  const s = slice as TimeSlice;
+  return Boolean(s.start) && !s.end;
 }
 
-/** 该任务当前是否正在计时 */
+/**
+ * 该任务当前是否正在计时。
+ *
+ * `task.timeSlices` 在类型上是必填，但**运行时的数据不由类型保证** ——
+ * 渲染路径统一先 `?? []`，避免 `Cannot read properties of undefined (reading 'some')`。
+ */
 export function isTiming(task: Task): boolean {
-  return task.timeSlices.some(isOpenSlice);
+  return (task.timeSlices ?? []).some(isOpenSlice);
 }
 
 /** 正在计时的那个切片的开始时刻（未计时返回 null） */
 export function openSliceStart(task: Task): string | null {
-  return task.timeSlices.find(isOpenSlice)?.start ?? null;
+  return (task.timeSlices ?? []).find(isOpenSlice)?.start ?? null;
 }
 
 /**
  * 累加切片时长（分钟）。
  * 只统计已闭合（start + end 都在）的切片；跨零点的切片按当日剩余时间截断。
  */
-export function sumSliceMinutes(slices: TimeSlice[]): number {
+export function sumSliceMinutes(slices: TimeSlice[] | null | undefined): number {
   let total = 0;
-  for (const s of slices) {
-    const start = toMinutes(s.start);
-    const end = toMinutes(s.end);
+  for (const s of slices ?? []) {
+    const start = toMinutes(s?.start);
+    const end = toMinutes(s?.end);
     if (start === null || end === null) continue;
     if (end > start) total += end - start;
   }
@@ -104,9 +118,10 @@ export interface TaskWindow {
 export function taskWindow(task: Task): TaskWindow | null {
   const starts: number[] = [];
   const ends: number[] = [];
-  for (const slice of task.timeSlices) {
-    const a = toMinutes(slice.start);
-    const b = toMinutes(slice.end);
+  // `timeSlices` 运行时不保证存在，元素也不保证是对象 —— 逐层校验后再取值
+  for (const slice of task.timeSlices ?? []) {
+    const a = toMinutes(slice?.start);
+    const b = toMinutes(slice?.end);
     if (a !== null) starts.push(a);
     if (b !== null) ends.push(b);
   }
@@ -173,7 +188,19 @@ export function deriveHeatmap(tasks: Task[]): HeatmapData {
   );
   const stats = new Map<TaskCategory, { totalMinutes: number; slices: TimeSlice[] }>();
 
-  for (const task of tasks) {
+  for (const task of tasks ?? []) {
+    /**
+     * ⚠️ 分类读不出合法值就**整条跳过**，不做兜底归类。
+     *
+     * 理由：下游 `CELL_COLOR[category]` / `CATEGORY_META[category]` 都是按四个
+     * 合法键写的查表，把一个陌生值塞进去会直接抛错炸掉整棵树；而"猜"它属于哪个
+     * 板块又会把用户的数据记到错误的色带与统计里。**不猜不补**是第一原则 ——
+     * 一条读不出分类的记录，本来也无法诚实地画在图上。
+     */
+    if (!isTaskCategory(task?.category)) {
+      console.warn("[FlowMirror] 跳过一条分类非法的任务（热力图）：", task?.id, task?.category);
+      continue;
+    }
     const w = taskWindow(task);
     if (!w || w.end <= w.start) continue;
     const minutes = w.end - w.start;
@@ -196,7 +223,8 @@ export function deriveHeatmap(tasks: Task[]): HeatmapData {
     entry.slices.push({
       start: minutesToClock(w.start),
       end: minutesToClock(w.end),
-      label: task.title,
+      // label 只用于展示；标题缺失时给空串，避免把 undefined 传进列表中
+      label: String(task.title ?? ""),
       // 实际超出计划即为失控段（黑洞溯源用）
       runaway:
         task.category === "blackhole" &&
@@ -230,7 +258,7 @@ export function deriveHeatmap(tasks: Task[]): HeatmapData {
 
 /** 该日是否有任何可用时间信息（用于热力图空态判定） */
 export function hasTimeData(tasks: Task[]): boolean {
-  return tasks.some((t) => {
+  return (tasks ?? []).some((t) => {
     const w = taskWindow(t);
     return Boolean(w && w.end > w.start);
   });
@@ -269,10 +297,24 @@ export function localDateKey(d: Date = new Date()): string {
 
 /** 日期 key 加减天数（跨月/跨年交给 Date 处理） */
 export function shiftDateKey(dateKey: string, deltaDays: number): string {
-  const [y, m, d] = dateKey.split("-").map(Number);
-  const date = new Date(y, (m ?? 1) - 1, d ?? 1);
+  const date = fromKey(dateKey);
   date.setDate(date.getDate() + deltaDays);
   return localDateKey(date);
+}
+
+/**
+ * `YYYY-MM-DD` → 本地 Date（0 点，避免时区偏移）。
+ *
+ * 非法 / 缺失的 key 一律退化为「今天」而不是抛错：日期是**每条渲染路径都会碰**
+ * 的东西（标题、空态文案、折叠行），为它炸掉整棵树完全不成比例。
+ */
+function fromKey(dateKey: string): Date {
+  if (typeof dateKey !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1);
 }
 
 /** "2026-09-11" → "9月11日 · 周五"（昨日之镜的日期标签） */
@@ -304,7 +346,6 @@ export function formatStamp(
 }
 
 export function fmtDateLabel(dateKey: string): string {
-  const [y, m, d] = dateKey.split("-").map(Number);
-  const date = new Date(y, (m ?? 1) - 1, d ?? 1);
+  const date = fromKey(dateKey);
   return `${date.getMonth() + 1}月${date.getDate()}日 · ${WEEKDAYS[date.getDay()]}`;
 }

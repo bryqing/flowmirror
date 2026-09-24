@@ -20,7 +20,15 @@ import { thoughtRepo, localDateKey } from "@/lib/thought-repository";
 import { formatStamp } from "@/lib/task-time";
 import { useAiStream } from "@/lib/use-ai-stream";
 import { extractTags, stripTags } from "@/lib/tags";
-import { CATEGORY_META, QUADRANT_META, categoryToQuadrant, type Task, type TaskCategory, type Thought } from "@/lib/types";
+import {
+  QUADRANT_META,
+  categoryMetaOf,
+  categoryToQuadrant,
+  coerceTaskCategory,
+  type Task,
+  type TaskCategory,
+  type Thought,
+} from "@/lib/types";
 import { TaskPickerDialog } from "@/components/thoughts/task-picker-dialog";
 import { cn } from "@/lib/utils";
 
@@ -74,10 +82,11 @@ export function ThoughtStream() {
   }, [synced]);
 
   // 常用标签（从当前列表聚合，按出现频次排序）
+  // `tags` 来自本地快照 / 云端行，运行时不保证存在 —— 逐条 `?? []` 后再遍历
   const allTags = useMemo(() => {
     const counter = new Map<string, number>();
     for (const t of thoughts) {
-      for (const tag of t.tags) {
+      for (const tag of t.tags ?? []) {
         counter.set(tag, (counter.get(tag) ?? 0) + 1);
       }
     }
@@ -88,12 +97,13 @@ export function ThoughtStream() {
   const visible = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return thoughts.filter((t) => {
-      if (activeTag && !t.tags.includes(activeTag)) return false;
+      const tags = t.tags ?? [];
+      if (activeTag && !tags.includes(activeTag)) return false;
       if (!kw) return true;
       return (
-        t.content.toLowerCase().includes(kw) ||
-        t.aiExpansion.toLowerCase().includes(kw) ||
-        t.tags.some((tag) => tag.toLowerCase().includes(kw))
+        String(t.content ?? "").toLowerCase().includes(kw) ||
+        String(t.aiExpansion ?? "").toLowerCase().includes(kw) ||
+        tags.some((tag) => tag.toLowerCase().includes(kw))
       );
     });
   }, [thoughts, keyword, activeTag]);
@@ -334,7 +344,9 @@ function ThoughtCard({
   // 完整时间戳（年月日 + 时分）：灵感库是长期常驻的，只给「09:47」无法定位到哪一天
   const time = useMemo(() => formatStamp(thought.createdAt, { full: true }), [thought.createdAt]);
 
-  const linkedMeta = linkedTask ? CATEGORY_META[linkedTask.category] : null;
+  // 查表走 categoryMetaOf：分类读到脏值时落到兜底键，而不是让整个关联徽标消失
+  const linkedMeta = linkedTask ? categoryMetaOf(linkedTask.category) : null;
+  const linkedQuadrant = linkedTask ? categoryToQuadrant(coerceTaskCategory(linkedTask.category)) : null;
 
   return (
     <div className="glass animate-fade-up flex flex-col gap-2.5 rounded-2xl p-4">
@@ -349,7 +361,7 @@ function ThoughtCard({
                 {time}
               </span>
             )}
-            {thought.tags.map((tag) => (
+            {(thought.tags ?? []).map((tag) => (
               <span
                 key={tag}
                 className="rounded-full bg-slate-100/70 px-1.5 py-0.5 text-[10px] text-muted-foreground"
@@ -410,7 +422,7 @@ function ThoughtCard({
         >
           <span className={cn("size-1.5 rounded-full", linkedMeta.dot)} />
           <span className={cn("font-mono text-[10px] opacity-60", linkedMeta.text)}>
-            {categoryToQuadrant(linkedTask.category).toUpperCase()}
+            {linkedQuadrant?.toUpperCase()}
           </span>
           <span className={cn("text-[11px] font-medium", linkedMeta.text)}>
             {linkedMeta.label}
