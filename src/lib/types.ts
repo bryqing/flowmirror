@@ -171,7 +171,13 @@ export interface MorningAnchorEntry {
   slogan: string;
   /** 小字注解：点破昨日卡点 + 今日时间锚点（几点前做什么） */
   action: string;
-  /** 来源：AI 凝练 / 用户手改 / 种子数据 */
+  /**
+   * 来源：AI 凝练 / 用户手改 / 历史遗留的预置兜底。
+   *
+   * ⚠️ `"seed"` 只是为了兼容旧数据而保留的**只读**标记：新版不再产生它，
+   * 且 `anchorRepo` 读到 source 为 seed 的行会直接当作不存在（详见
+   * anchor-repository.ts 的 isLegacySeed）。
+   */
   source: "ai" | "user" | "seed";
   /** 具体时间戳 ISO 字符串 */
   createdAt: string;

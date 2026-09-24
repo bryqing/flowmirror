@@ -13,7 +13,14 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import type { MorningAnchorEntry } from "@/lib/types";
 
-const SNAPSHOT_KEY = "flowmirror:anchor:snapshot";
+/**
+ * 心锚本地快照键。
+ *
+ * 导出是为了让 `legacy-purge` 能一并清洗历史遗留的「预置心锚」
+ * （旧版 AI 失败时会以 `source: "seed"` 把一份写死的兜底文案落库，
+ * 比如「不等状态，先动十分钟」—— 用户从没写过，却会一直挂在卡片上）。
+ */
+export const ANCHOR_SNAPSHOT_KEY = "flowmirror:anchor:snapshot";
 
 /** 本地日期 key "YYYY-MM-DD"（本地时区） */
 export function localDateKey(d = new Date()): string {
@@ -69,14 +76,28 @@ function rowToAnchor(row: Record<string, unknown>): MorningAnchorEntry {
   };
 }
 
+/**
+ * 历史遗留的**预置兜底心锚**。
+ *
+ * 旧版本在 AI 凝练失败时会写死一条 slogan（"不等状态，先动十分钟"）并把 source
+ * 记成 `"seed"`。这些行已经躺进了一些账号的云端表与本地快照里 ——
+ * 光停止新增是不够的，必须**在读取时当作不存在**，否则用户依然会看到一句
+ * 自己从没写过的"今日心锚"，而这正是「零 Mock」要根除的东西。
+ *
+ * 读到就顺手从本地快照里抹掉，让它自然消失；云端旧行留给用户自行清理。
+ */
+function isLegacySeed(a: MorningAnchorEntry): boolean {
+  return a.source === "seed";
+}
+
 // ---- 本地降级存储 ----
 
 function loadLocal(): MorningAnchorEntry[] {
-  return safeGet<MorningAnchorEntry[]>(SNAPSHOT_KEY) ?? [];
+  return safeGet<MorningAnchorEntry[]>(ANCHOR_SNAPSHOT_KEY) ?? [];
 }
 
 function saveLocal(list: MorningAnchorEntry[]): void {
-  safeSet(SNAPSHOT_KEY, list);
+  safeSet(ANCHOR_SNAPSHOT_KEY, list);
 }
 
 /** 是否走远程（登录 + 配置齐全） */
@@ -105,10 +126,14 @@ async function guard<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 export const anchorRepo = {
-  /** 读取某日心锚，无则返回 null */
+  /** 读取某日心锚，无则返回 null（历史遗留的 seed 兜底行一律视作不存在） */
   async fetchByDate(dateKey: string): Promise<MorningAnchorEntry | null> {
     if (!(await isRemoteMode())) {
-      return loadLocal().find((a) => a.date === dateKey) ?? null;
+      const local = loadLocal();
+      const kept = local.filter((a) => !isLegacySeed(a));
+      // 顺手清理掉快照里的旧 seed 行，避免它们一直留在本地被反复读到
+      if (kept.length !== local.length) saveLocal(kept);
+      return kept.find((a) => a.date === dateKey) ?? null;
     }
     return guard(async () => {
       const supabase = getSupabase();
@@ -122,7 +147,9 @@ export const anchorRepo = {
         console.warn("[FlowMirror] 拉取心锚失败：", error.message);
         return null;
       }
-      return data ? rowToAnchor(data as Record<string, unknown>) : null;
+      if (!data) return null;
+      const entry = rowToAnchor(data as Record<string, unknown>);
+      return isLegacySeed(entry) ? null : entry;
     }, null);
   },
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Dices, Loader2, Pencil, RefreshCw, Sunrise, X } from "lucide-react";
+import { AlertTriangle, Check, Dices, Loader2, Pencil, RefreshCw, Sparkles, Sunrise, X } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,19 +16,19 @@ import type { MorningAnchorEntry } from "@/lib/types";
  * - 无记录时挂载后自动调用 AI 凝练（依据昨日之镜 + 今日任务）
  * - 右上角提供「重 roll」「编辑」，支持手动改写后落库
  *
+ * ⚠️ **不允许有任何写死的兜底文案。**
+ * 早先版本在 AI 与存储都不可用时，会展示并**落库**一条预置心锚
+ * （"不等状态，先动十分钟"），source 记为 `"seed"`。那是一条编出来的话，
+ * 却和用户自己写的心锚长得一模一样 —— 用户会以为那是自己的今日锚点。
+ * 现在改成：凝练不出来就诚实地空着，给一个明确的「生成今日心锚」按钮。
+ *
  * 状态机（loadState）：
  *   "idle"     → 尚未开始（SSR / 未挂载）
  *   "loading"  → 正在读取本地/远程记录
  *   "generating" → 正在调用 AI 凝练
  *   "ready"    → 已有心锚可展示
- *   "error"    → 全链路失败，展示兜底心锚 + 重试入口
+ *   "error"    → 读取或凝练失败，展示空态 + 重试入口
  */
-
-/** 预置兜底心锚（当 AI 与存储均不可用时的最后防线，绝不留下空白卡片） */
-const FALLBACK_ANCHOR: { slogan: string; action: string } = {
-  slogan: "不等状态，先动十分钟",
-  action: "抽不出好开头就先写最烂的第一行——10:00 前把最硬的那件事推到「有初稿」。",
-};
 
 type LoadState = "idle" | "loading" | "generating" | "ready" | "error";
 
@@ -100,8 +100,8 @@ export function MorningAnchor() {
   };
 
   /**
-   * 全链路容错核心：任何环节失败都不允许留下空白卡片。
-   * 依次降级：AI 生成 → 落库 → 落库失败则用内存态兜底展示 → 再失败用 FALLBACK_ANCHOR。
+   * 凝练并保存当日心锚。**AI 没给出有效内容时什么都不做** ——
+   * 既不展示、也不落库，把空态留给界面（宁可空白，也不要编一句给用户看）。
    */
   const generateWith = useCallback(
     async (key: string, labelText: string): Promise<boolean> => {
@@ -110,55 +110,46 @@ export function MorningAnchor() {
       setErrMsg(null);
       setTip(null);
 
-      let slogan = FALLBACK_ANCHOR.slogan;
-      let action = FALLBACK_ANCHOR.action;
-      let aiOk = false;
-
-      // —— 第一层：调用 AI（异常/空返回均不抛出，走兜底文案）——
+      // —— 调用 AI：拿不到有效内容就直接进入错误态，没有兜底文案 ——
+      let parsed: { slogan: string; action: string } | null = null;
       try {
         const full = await send(buildContext(key, labelText));
-        const parsed = parseAnchor(full);
-        if (parsed) {
-          slogan = parsed.slogan;
-          action = parsed.action || FALLBACK_ANCHOR.action;
-          aiOk = true;
-        }
+        parsed = parseAnchor(full);
       } catch (e) {
         console.warn("[FlowMirror] 心锚 AI 生成异常：", e);
       }
 
-      // —— 第二层：尝试落库（失败也不影响展示）——
+      if (!parsed) {
+        // 置位引导标记：失败后**不自动重试**（否则任务每次改动都会再打一次 AI），
+        // 把重试权交给用户手上的按钮。
+        bootstrapRef.current = true;
+        setLoadState("error");
+        setErrMsg("AI 未能凝练出今日心锚，可点下方按钮重新生成，或自己写一句");
+        pushToast("心锚凝练未返回有效内容，已保留空态", "warn");
+        return false;
+      }
+
+      // —— 落库（失败也不影响展示，用内存态先把结果呈现出来）——
       let saved: MorningAnchorEntry | null = null;
       try {
-        saved = await anchorRepo.save(key, slogan, action, aiOk ? "ai" : "seed");
+        saved = await anchorRepo.save(key, parsed.slogan, parsed.action, "ai");
       } catch (e) {
         console.warn("[FlowMirror] 心锚落库异常：", e);
       }
 
-      // 落库成功用落库结果；落库失败则用内存态兜底对象，保证界面一定有内容
-      const entry: MorningAnchorEntry =
-        saved ?? {
-          id: `local-${key}`,
-          date: key,
-          slogan,
-          action,
-          source: aiOk ? "ai" : "seed",
-          createdAt: new Date().toISOString(),
-        };
+      const entry: MorningAnchorEntry = saved ?? {
+        id: `local-${key}`,
+        date: key,
+        slogan: parsed.slogan,
+        action: parsed.action,
+        source: "ai",
+        createdAt: new Date().toISOString(),
+      };
 
       setAnchor(entry);
-      setLoadState(aiOk ? "ready" : "error");
-
-      if (aiOk) {
-        bootstrapRef.current = true;
-        setTip(saved ? null : "已展示心锚（本地暂存，云端未同步）");
-      } else {
-        // AI 失败但已给出兜底心锚：仍可展示，同时提示可重试
-        bootstrapRef.current = true;
-        setTip("已为你展示预置心锚");
-        setErrMsg("AI 凝练未返回有效内容，可点「重新凝练」再试");
-        pushToast("心锚 AI 凝练失败，已回退到预置心锚", "warn");
-      }
+      setLoadState("ready");
+      bootstrapRef.current = true;
+      setTip(saved ? null : "已展示心锚（本地暂存，云端未同步）");
       return true;
     },
     [send, buildContext, pushToast],
@@ -225,7 +216,24 @@ export function MorningAnchor() {
         return;
       }
 
-      // 2) 无记录 → 自动凝练（generateWith 内部已全链路容错，不会抛出）
+      /**
+       * 2) 无记录：**只有当天确实有内容可依据时才自动凝练**。
+       *
+       * 完全空白的一天（一条任务都没有、也没有任何复盘）不该被"自动拼凑"出
+       * 一条心锚 —— 那等于系统替用户编了一句他从没写过的今日方针，
+       * 和早先写死的预置心锚是同一类问题，只是换成了 AI 来编（`buildContext`
+       * 此时送过去的全是空数组，模型只能凭空发挥）。
+       *
+       * 所以这里停在纯净空态，把决定权交给用户：下方备有「生成今日心锚」
+       * 与「自己写」两条出口，点一下照样能拿到 AI 凝练的结果。
+       *
+       * ⚠️ 刻意**不置** `bootstrapRef`：任务稍后才从本地快照/云端加载进来时，
+       * 本 effect 会因 `tasks` 变化重跑，那时数据齐了再自动凝练。
+       */
+      if (tasks.length === 0) {
+        setLoadState("ready");
+        return;
+      }
       if (cancelled) return;
       await generateWith(dateKey, dateLabel(new Date()));
     })();
@@ -233,7 +241,7 @@ export function MorningAnchor() {
     return () => {
       cancelled = true;
     };
-  }, [dateKey, generateWith]);
+  }, [dateKey, generateWith, tasks]);
 
   const startEdit = () => {
     if (!anchor) return;
@@ -382,17 +390,56 @@ export function MorningAnchor() {
                 正在凝练今日心锚…
               </p>
             </div>
-          ) : (
+          ) : displaySlogan ? (
             <>
               <h2 className="mt-1.5 text-lg font-light leading-snug tracking-tight sm:text-xl">
-                {displaySlogan || FALLBACK_ANCHOR.slogan}
+                {displaySlogan}
               </h2>
-              {(displayAction || !displaySlogan) && (
+              {displayAction && (
                 <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-                  {displayAction || FALLBACK_ANCHOR.action}
+                  {displayAction}
                 </p>
               )}
             </>
+          ) : (
+            /* 纯净空态：没有心锚就不摆任何预设文案，只给两条出口 */
+            <div className="mt-2.5 flex flex-col gap-2.5" data-anchor-empty>
+              <p className="text-sm font-light text-slate-500">今日还没有心锚</p>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                让 AI 依据昨日之镜与今日任务凝练一条，或者自己写一句今天要守住的动作。
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  data-anchor-generate
+                  onClick={regenerate}
+                  disabled={loading}
+                  className="border-cat-deep/30 text-cat-deep hover:bg-cat-deep/10"
+                >
+                  {loading ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3" />
+                  )}
+                  生成今日心锚
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => {
+                    setDraftSlogan("");
+                    setDraftAction("");
+                    setEditing(true);
+                    setTip(null);
+                  }}
+                  disabled={loading}
+                >
+                  <Pencil className="size-3" />
+                  自己写
+                </Button>
+              </div>
+            </div>
           )}
 
           {/* 提示 / 错误行 */}
@@ -404,8 +451,8 @@ export function MorningAnchor() {
           )}
           {tip && !editing && <p className="mt-2 text-[11px] text-cat-deep/80">{tip}</p>}
 
-          {/* 失败态重试入口 */}
-          {loadState === "error" && !editing && (
+          {/* 失败态重试入口：空态里已经有「生成今日心锚」，这里只服务于"已有内容但刷新失败" */}
+          {loadState === "error" && !editing && displaySlogan && (
             <Button
               size="xs"
               variant="outline"

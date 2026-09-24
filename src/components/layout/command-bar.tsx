@@ -189,6 +189,7 @@ export function Toaster() {
       {toasts.map((t) => (
         <div
           key={t.id}
+          data-toast={t.tone}
           className={cn(
             "glass-strong animate-fade-up pointer-events-auto flex max-w-md items-center gap-2.5 rounded-2xl px-4 py-3 text-xs leading-relaxed",
             t.tone === "danger" && "glow-blackhole border-cat-blackhole/30",

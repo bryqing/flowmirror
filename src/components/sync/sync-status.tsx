@@ -1,7 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Cloud, CloudOff, Loader2, LogOut, Mail, Lock, UserPlus, LogIn } from "lucide-react";
+import {
+  Cloud,
+  CloudOff,
+  Loader2,
+  LogOut,
+  Mail,
+  Lock,
+  UserPlus,
+  LogIn,
+  RefreshCw,
+} from "lucide-react";
 import { useFlow } from "@/components/flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,13 +22,32 @@ type Mode = "signin" | "signup";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** 相对时间：同步时间戳越近越有意义，绝对时间反而要用户自己换算 */
+function relativeTime(ts: number | null): string {
+  if (!ts) return "尚未同步过";
+  const diff = Math.max(0, Date.now() - ts);
+  const sec = Math.floor(diff / 1000);
+  if (sec < 10) return "刚刚";
+  if (sec < 60) return `${sec} 秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} 分钟前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时前`;
+  return new Date(ts).toLocaleDateString("zh-CN");
+}
+
 /**
  * 同步状态胶囊 + 登录面板（非侵入式，固定右上角，不破坏三层布局）
- * - synced=true：显示「已同步」，点开可查看账号 / 退出
+ * - synced=true：显示「已同步」，点开可查看账号 / 立即同步 / 退出
  * - synced=false：显示「未同步」，点开可邮箱密码登录或注册
+ *
+ * 「立即同步」为何必须存在：自动通道（Realtime / 轮询 / 切回前台）都在用户
+ * 无感知时工作，其中任何一环失灵，用户手上就没有"我现在就要最新数据"的手段了。
+ * 这个按钮是那个兜底，也是排查同步问题时最直接的自证方式。
  */
 export function SyncStatus() {
-  const { synced, userEmail, signInWithPassword, signUpWithPassword, signOut } = useFlow();
+  const { synced, userEmail, lastSyncedAt, syncing, syncNow, signInWithPassword, signUpWithPassword, signOut } =
+    useFlow();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
@@ -84,9 +113,30 @@ export function SyncStatus() {
                   <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{userEmail}</p>
                 </div>
               </div>
+
+              <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <span className="text-[11px] text-subtle-foreground">最近同步</span>
+                <span className="text-[11px] font-medium text-slate-700" data-last-synced>
+                  {relativeTime(lastSyncedAt)}
+                </span>
+              </div>
+
               <p className="text-xs leading-relaxed text-muted-foreground">
-                任务的新增 / 完成 / 改期已在手机与电脑端实时同步。
+                任务的新增 / 完成 / 改期会在手机与电脑端同步：另一端改动后，本机切回前台会自动刷新，
+                也可以点下方按钮立即拉取云端最新数据。
               </p>
+
+              <Button
+                data-sync-now
+                variant="outline"
+                onClick={() => void syncNow()}
+                disabled={syncing}
+                className="border-cat-deep/30 text-cat-deep hover:bg-cat-deep/10"
+              >
+                <RefreshCw className={cn("mr-1.5 size-3.5", syncing && "animate-spin")} />
+                {syncing ? "同步中…" : "立即同步"}
+              </Button>
+
               <Button
                 variant="outline"
                 onClick={async () => {
@@ -103,7 +153,9 @@ export function SyncStatus() {
           ) : (
             <>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                登录后，你的四象限任务与微复盘将同步到云端，手机与电脑端实时互通。使用同一个邮箱账号即可跨设备访问。
+                <strong className="text-foreground">未登录时，所有任务只存在这台设备上</strong>
+                —— 手机上加的任务不会出现在电脑上，反过也一样。
+                在两端用同一个邮箱登录，任务与微复盘就会同步到云端并双向互通。
               </p>
 
               {/* 登录 / 注册 切换 */}
@@ -171,6 +223,7 @@ export function SyncStatus() {
               </label>
 
               <Button
+                data-auth-submit
                 onClick={submit}
                 disabled={!canSubmit}
                 className="bg-cat-deep/90 text-white hover:bg-cat-deep"

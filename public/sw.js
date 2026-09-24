@@ -6,8 +6,13 @@
  * - 跨域（Supabase / 字体 / 图床）走 network-only，不污染缓存
  *
  * 缓存版本升级：只改 CACHE_VERSION，旧 cache 会被自动清掉
+ *
+ * ⚠️ v4：早期版本把内置演示任务写进了应用状态，客户端 bundle 与本地缓存都可能
+ * 长期留着那份旧构建。升级版本号会强制丢弃所有旧 cache，
+ * 配合 `src/lib/legacy-purge.ts` 清洗 localStorage，
+ * 确保"源码已删掉的假数据"不会靠缓存继续活着。
  */
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const SHELL_CACHE = `flowmirror-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `flowmirror-runtime-${CACHE_VERSION}`;
 

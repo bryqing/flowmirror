@@ -66,6 +66,7 @@ export function TaskQuadrants({ mode = "battle" }: { mode?: "battle" | "backlog"
     setTaskTime,
     toggleTiming,
     renameTask,
+    isViewingToday,
   } = useFlow();
 
   // mounted：SSR 与客户端首帧渲染占位，挂载后再展示动态任务数据，
@@ -211,8 +212,15 @@ export function TaskQuadrants({ mode = "battle" }: { mode?: "battle" | "backlog"
                 </p>
               )}
               {mounted && list.length === 0 && (
-                <p className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-100 px-3 py-6 text-center text-[11px] text-slate-400">
-                  {isBacklog ? "池子还空着 · 把「以后再说」的事丢进来" : "暂无安排"}
+                <p
+                  data-quadrant-empty={category}
+                  className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-100 px-3 py-6 text-center text-[11px] leading-relaxed text-slate-400"
+                >
+                  {isBacklog
+                    ? "池子还空着 · 把「以后再说」的事丢进来"
+                    : isViewingToday
+                      ? "今日暂无安排，点击上方或下方添加"
+                      : "这一天暂无安排"}
                 </p>
               )}
               {mounted && list.map(renderChip)}
@@ -502,6 +510,10 @@ function TaskChip({
     <div
       role="button"
       tabIndex={0}
+      /* 卡片本体的稳定锚点：整卡是「打开详情」的热区。
+         没有它时自动化只能靠 role="button" 反查父级，或者误点标题
+         （标题点下去是**就地改名**，不是开抽屉），很容易测出假失败。 */
+      data-task-card={task.id}
       onClick={() => {
         // 改名进行中就别顺手把详情抽屉也拉出来（输入框会被盖住，白改）
         if (editing) return;

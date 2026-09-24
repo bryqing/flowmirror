@@ -1,7 +1,8 @@
 "use client";
 
-import { Activity, AlarmClock, Clock3 } from "lucide-react";
+import { Activity, AlarmClock, CalendarRange, Clock3 } from "lucide-react";
 import { useFlow } from "@/components/flow-context";
+import { DayCapsules } from "@/components/layout/date-strip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CATEGORY_META, type TaskCategory } from "@/lib/types";
 import {
@@ -33,7 +34,7 @@ const CELL_COLOR: Record<TaskCategory, [string, string, string]> = {
 };
 
 export function TimeHeatmap() {
-  const { tasks, isViewingToday } = useFlow();
+  const { tasks, isViewingToday, selectedDate } = useFlow();
 
   const data = deriveHeatmap(tasks);
   const hasData = hasTimeData(tasks);
@@ -41,6 +42,26 @@ export function TimeHeatmap() {
   /** 有时间的任务数 / 总数：用来解释"为什么这条色带是空的" */
   const timedCount = tasks.filter((t) => windowLabel(t) !== null).length;
   const totalMinutes = data.stats.reduce((sum, s) => sum + s.totalMinutes, 0);
+
+  /**
+   * 四大板块切片：**有记录的置顶，没记录的后置**。
+   *
+   * 原来固定按 CATEGORY_ORDER 排，于是「无记录」的空卡片可能夹在两个有数据的
+   * 板块中间，把真正有内容的信息挤下去。这里按内容量降序重排：
+   * 先看有没有切片，再看时长 —— 同为空时保持原本的固定顺序（稳定排序）。
+   */
+  const orderedStats = data.stats
+    .map((stat, index) => ({ stat, index }))
+    .sort((a, b) => {
+      const aHas = a.stat.totalMinutes > 0 || a.stat.slices.length > 0 ? 1 : 0;
+      const bHas = b.stat.totalMinutes > 0 || b.stat.slices.length > 0 ? 1 : 0;
+      if (aHas !== bHas) return bHas - aHas;
+      if (a.stat.totalMinutes !== b.stat.totalMinutes) {
+        return b.stat.totalMinutes - a.stat.totalMinutes;
+      }
+      return a.index - b.index;
+    })
+    .map((x) => x.stat);
 
   return (
     <section className="flex flex-col gap-4">
@@ -53,6 +74,27 @@ export function TimeHeatmap() {
         <p className="text-[11px] text-subtle-foreground">
           {hasData ? `已排布 ${fmtDuration(totalMinutes)} · ${timedCount}/${tasks.length} 项有时间` : "彩色带 · 一眼看穿失控时段"}
         </p>
+      </div>
+
+      {/*
+        日期切换入口。
+        这一条与「今日战局」顶部那条共用同一个 `DayCapsules` 组件、读写同一个
+        `selectedDate`，所以两边天然联动：在战局选了哪天，切过来就是哪天；
+        在这里换一天，战局也跟着换。大盘数据本身由 `tasks`（= selectedDate 的切片）
+        派生，因此切换日期后色带与切片明细会立刻重算 —— 不需要额外同步代码。
+      */}
+      <div
+        data-heatmap-datebar
+        className="glass flex items-center gap-2 rounded-2xl px-3 py-2"
+      >
+        <span className="hidden shrink-0 items-center gap-1.5 pl-1 pr-2 text-[11px] text-subtle-foreground sm:flex">
+          <CalendarRange className="size-3.5" />
+          日期
+        </span>
+        <DayCapsules compact dataPrefix="heatmap-date" showTodayButton />
+        <span className="hidden shrink-0 pl-1 font-mono text-[10px] text-subtle-foreground md:inline">
+          {selectedDate}
+        </span>
       </div>
 
       <Card className="animate-fade-up">
@@ -113,9 +155,9 @@ export function TimeHeatmap() {
             </div>
           )}
 
-          {/* 四大板块切片明细 */}
-          <div className="grid gap-2 sm:grid-cols-2">
-            {data.stats.map((stat) => {
+          {/* 四大板块切片明细：有记录的排前面，没记录的后置 */}
+          <div className="grid gap-2 sm:grid-cols-2" data-stat-grid>
+            {orderedStats.map((stat) => {
               const meta = CATEGORY_META[stat.category];
               return (
                 <div

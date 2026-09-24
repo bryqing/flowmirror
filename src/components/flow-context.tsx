@@ -20,7 +20,6 @@ import {
   type Task,
   type TaskCategory,
 } from "@/lib/types";
-import { TODAY_TASKS } from "@/lib/mock-data";
 import { fmtDuration, uid } from "@/lib/utils";
 import { isTiming, nowClock, shiftDateKey, sumSliceMinutes } from "@/lib/task-time";
 import {
@@ -44,8 +43,28 @@ import {
   loadQueue,
   enqueue,
   dequeue,
+  bumpAttempt,
+  hasPendingInserts,
+  MAX_ATTEMPTS,
   type PendingOp,
 } from "@/lib/offline-store";
+import { purgeLegacySeedData, type PurgeReport } from "@/lib/legacy-purge";
+
+/**
+ * 启动即清洗历史演示数据 —— **必须发生在模块加载期，早于任何读取**。
+ *
+ * 放在这里而不是某个 `useEffect` 里，是因为顺序上不能有缝：
+ * 组件里恢复本地快照的 effect 一旦先跑，就又会把旧缓存里的 `TODAY_TASKS`
+ * 捞进 `tasks`，界面先闪一屏假任务、随后才被清掉。放在模块顶层可以确保
+ * 「清洗完成」严格早于「第一次读 localStorage」，任何调用方都不需要关心这件事。
+ *
+ * SSR 期间 `window` 不存在，函数内部直接返回空报告，不影响服务端渲染。
+ */
+const PURGE_REPORT: PurgeReport = purgeLegacySeedData();
+
+/** 本次启动是否真的清理掉了历史假数据（供挂载后提示用户） */
+const PURGED_COUNT =
+  PURGE_REPORT.removedTasks + PURGE_REPORT.removedAnchors + PURGE_REPORT.removedQueueOps;
 
 export interface Toast {
   id: string;
@@ -158,6 +177,18 @@ interface FlowContextValue {
   openDetail: (id: string) => void;
   closeDetail: () => void;
   pushToast: (message: string, tone?: Toast["tone"]) => void;
+  /**
+   * **手动立即同步**：把积压的本地改动推上去，再从云端拉最新数据。
+   *
+   * 自动通道（Realtime / 定时轮询 / 切回前台）都在用户无感知时工作，
+   * 一旦其中某一环失灵，用户手上就没有任何"我现在就想要最新数据"的手段。
+   * 这个入口是那个兜底手段，也是排查同步问题时最直接的自证方式。
+   */
+  syncNow: () => Promise<void>;
+  /** 最近一次成功从云端拉取数据的时间戳（毫秒）；从未成功过为 null */
+  lastSyncedAt: number | null;
+  /** 是否正在同步中（供按钮禁用态使用） */
+  syncing: boolean;
 }
 
 /**
@@ -172,25 +203,36 @@ function sameTaskList(a: Task[], b: Task[]): boolean {
 const FlowContext = createContext<FlowContextValue | null>(null);
 
 export function FlowProvider({ children }: { children: ReactNode }) {
-  // 关键：初始状态必须与 SSR 完全一致（一律 TODAY_TASKS）。
-  // 本地快照的读取放在挂载后的 useEffect 中异步触发，避免 SSR 与客户端首帧水合差异。
-  const [tasks, setTasks] = useState<Task[]>(TODAY_TASKS);
+  /**
+   * 当日看板任务。
+   *
+   * ⚠️ **初值必须是空数组，绝不能再是 TODAY_TASKS 之类的内置演示数据。**
+   *
+   * 以前这里放演示数据，是为了"SSR 与客户端首帧一致"。但代价是：**任何一个还没
+   * 被真实数据填充的瞬间，界面都在展示一整天不存在的假任务** —— 全新的日期、
+   * 刚登录还没拉完、拉取失败、未登录……用户看到的都是同一批陌生任务，
+   * 完全无法分辨"这是同步坏了"还是"我今天真有这些事"。
+   *
+   * 空数组既是水合安全的（纯静态值，SSR/客户端完全一致），又是唯一诚实的初值：
+   * 没有数据就诚实地空着。本地快照 / 云端数据在挂载后的 effect 里接管。
+   */
+  const [tasks, setTasks] = useState<Task[]>([]);
   /**
    * 「待执行清单」全局池（Q3）。
    *
-   * 初值与 SSR 同源（演示数据里的 rest 条目，纯静态计算 → 首帧一致）；
-   * 挂载后再由本地快照 / 云端全量集合接管。它与 `tasks` 是**并列的两个池**：
-   * `tasks` 按 selectedDate 切片，这里永远全量。
+   * 同样以空数组起步（详见上方 `tasks` 的说明）；本地快照 / 云端全量集合
+   * 在挂载后接管。它与 `tasks` 是**并列的两个池**：`tasks` 按 selectedDate 切片，
+   * 这里永远全量。
    */
-  const [backlogTasks, setBacklogTasks] = useState<Task[]>(() =>
-    TODAY_TASKS.filter((t) => t.category === "rest")
-  );
+  const [backlogTasks, setBacklogTasks] = useState<Task[]>([]);
   const [careMode, setCareMode] = useState(false);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [synced, setSynced] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string>(() => todayKey());
   /** 挂载后校准的「今天」。初值与 selectedDate 同源，SSR 与首帧一致，不产生水合差异 */
   const [today, setToday] = useState<string>(() => todayKey());
@@ -216,30 +258,35 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   const todayRef = useRef<string>(today);
 
   /**
-   * 某日无远程数据时的本地兜底：今日给演示数据，其余日期一律留空。
+   * 某日看板的本地兜底：**只读本地快照，读不到就是空数组**。
    *
-   * ⚠️ 只返回**日池**任务（Q1/Q2/Q4）。「待执行清单」不在按日快照的语义里，
+   * ⚠️ 这里以前是 `snap ?? (dateKey === today ? TODAY_TASKS : [])`，
+   * 那个 `?? TODAY_TASKS` 正是"新日期默认塞入假数据"的元凶：
+   * 任何一天只要**还没有本地快照**（全新日期、跨零点后的新一天、
+   * 刚清过缓存、换了一台设备），今天就会被灌入一整套演示任务。
+   * 日期只是数据的一个坐标，不是"该发一批示例数据"的信号 —— 一律留空。
+   *
+   * 另外只返回**日池**任务（Q1/Q2/Q4）：「待执行清单」不在按日快照的语义里，
    * 若让它混进来，切到任意一天都会看到同一批 Q3 条目被当成「那天的任务」
    * 参与完成率、热力大盘等按日统计 —— 池子必须是另一个维度。
    */
   const localTasksFor = useCallback((dateKey: string): Task[] => {
     const snap = loadSnapshot(dateKey);
-    const source = snap ?? (dateKey === todayRef.current ? TODAY_TASKS : []);
-    return source.filter(isDayPoolTask);
+    return (snap ?? []).filter(isDayPoolTask);
   }, []);
 
   /**
    * 「待执行清单」全局池的本地兜底，按优先级：
-   *   1) 池子自己的快照（空数组也是有效值，代表「用户把池子清空了」）；
+   *   1) 池子自己的快照（**空数组也是有效值**，代表「用户把池子清空了」）；
    *   2) **迁移**：旧版本的 Q3 存在「今日快照」里，把它接过来，
    *      否则升级后用户会发现待执行清单凭空消失了；
-   *   3) 演示数据里的 rest 条目（全新安装、纯本地演示）。
+   *   3) 都没有 → 空数组（同样不再回退演示数据）。
    */
   const localBacklog = useCallback((): Task[] => {
     const snap = loadBacklogSnapshot();
     if (snap) return snap;
-    const day = loadSnapshot(todayRef.current) ?? TODAY_TASKS;
-    return day.filter((t) => t.category === "rest");
+    const day = loadSnapshot(todayRef.current);
+    return (day ?? []).filter((t) => t.category === "rest");
   }, []);
 
   /** 跨池查任务：日看板 + 全局池。按 id 定位的读路径（详情/复盘/编辑）一律用它 */
@@ -256,6 +303,14 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   // 远程写入开关：避免在 Realtime 回调里重复回写
   const suppressRemoteRef = useRef(false);
 
+  /**
+   * 供 `syncNow()` 调用的「立即同步」实现。
+   *
+   * 真正的实现需要 `flushQueue` / `pollOnce` 这些定义在下面那个大 effect 里的闭包，
+   * 用 ref 把最新的实现挂出来，外部就能在不重建订阅的前提下随时触发一次同步。
+   */
+  const syncNowRef = useRef<(() => Promise<void>) | null>(null);
+
   const candleMode = useMemo(() => {
     const h = new Date().getHours();
     return h >= 23 || h < 1;
@@ -268,6 +323,243 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4600);
   }, []);
+
+  /**
+   * 告知本次启动清理掉了历史演示数据。
+   *
+   * 有必要说一声：用户会看到几条"自己没建过的任务"突然消失，
+   * 不解释的话第一反应是"数据丢了"，而不是"早就该删的假数据终于没了"。
+   * 只在真的清理过时提示一次（版本戳保证一台设备只发生一次）。
+   *
+   * 刻意延到挂载之后的一拍再弹：清洗发生在模块加载期，比 React 挂载还早，
+   * 立刻 `pushToast` 会在首帧渲染过程中同步 setState；推迟一拍既避开这一点，
+   * 也让这条提示出现在界面已经稳定之后，更容易被看见。
+   */
+  useEffect(() => {
+    if (PURGED_COUNT <= 0) return;
+    const timer = setTimeout(() => {
+      pushToast(`已清理 ${PURGED_COUNT} 条历史内置演示数据`, "info");
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pushToast]);
+
+  /** 新增：按分类落进对应的池，并写该池的快照 */
+  const insertTask = useCallback((task: Task) => {
+    if (task.category === "rest") {
+      setBacklogTasks((prev) => {
+        const next = [task, ...prev].sort(byCreatedAtDesc);
+        saveBacklogSnapshot(next);
+        return next;
+      });
+    } else {
+      setTasks((prev) => {
+        const next = [...prev, task].sort(byScheduledTime);
+        saveSnapshot(next, tasksDateRef.current);
+        return next;
+      });
+    }
+  }, []);
+
+  /**
+   * 云端插入成功 → 用服务端返回的真实行替换本地临时条目。
+   *
+   * 先从**两个池**里按「临时 id / 真实 id」各摘一次，再按返回行的分类放回该在的池：
+   * 临时行与真实行的分类理论上一致，但 AI 复核可能在中途改了象限，
+   * 用返回值而不是原对象来决定归属，才不会把一条 q1 塞进待执行池里。
+   *
+   * ⚠️ 这一步是**多端同步的隐形前提**：只要本地还留着临时 id，
+   * `commitTask` 里的 `SERVER_ID.test(id)` 门控就会一直为假 ——
+   * 那条任务的后续改名/计时/打钩**永远不会被推上云端**，
+   * 于是"手机改了、电脑永远看不到"。所以任何写入云端成功的路径都必须调用它。
+   */
+  const replaceTask = useCallback((tempId: string, saved: Task) => {
+    setTasks((prev) => {
+      const stripped = prev.filter((t) => t.id !== tempId && t.id !== saved.id);
+      const next = (
+        saved.category === "rest" ? stripped : [...stripped, saved]
+      ).sort(byScheduledTime);
+      saveSnapshot(next, tasksDateRef.current);
+      return next;
+    });
+    setBacklogTasks((prev) => {
+      const stripped = prev.filter((t) => t.id !== tempId && t.id !== saved.id);
+      const next = (
+        saved.category === "rest" ? [saved, ...stripped] : stripped
+      ).sort(byCreatedAtDesc);
+      saveBacklogSnapshot(next);
+      return next;
+    });
+  }, []);
+
+  /**
+   * 统一的「改单个任务」出口：本地即时改写 + 快照落盘 + 云端同步（失败入离线队列）。
+   *
+   * 时间轴相关的三个写操作（标记时间段 / 开始计时 / 结束计时）、就地改名、
+   * 打钩完成、微复盘沉淀都走这里。各自写一遍三件套极易漏环 —— 漏快照则刷新回滚，
+   * 漏入队则断网丢改动，而这两个 bug 都只在「刷新」或「断网」时才暴露，平时完全看不出来。
+   *
+   * 🔑 **按分类路由到正确的池**：`rest` 落在全局池（不按日期分片），其余落在当日看板。
+   * 两个池按 category 互斥，所以这里同时负责「摘掉另一个池里的同名条目」——
+   * 象限变了就是一次搬家（如 AI 复核把刚记的 q3 改成 q1），
+   * 不摘的话旧池会留下一个点不动的幽灵条目。
+   */
+  const commitTask = useCallback((updated: Task) => {
+    if (updated.category === "rest") {
+      setTasks((prev) => {
+        if (!prev.some((t) => t.id === updated.id)) return prev;
+        const next = prev.filter((t) => t.id !== updated.id);
+        saveSnapshot(next, tasksDateRef.current);
+        return next;
+      });
+      setBacklogTasks((prev) => {
+        const next = (
+          prev.some((t) => t.id === updated.id)
+            ? prev.map((t) => (t.id === updated.id ? updated : t))
+            : [updated, ...prev]
+        ).sort(byCreatedAtDesc);
+        saveBacklogSnapshot(next);
+        return next;
+      });
+    } else {
+      setBacklogTasks((prev) => {
+        if (!prev.some((t) => t.id === updated.id)) return prev;
+        const next = prev.filter((t) => t.id !== updated.id);
+        saveBacklogSnapshot(next);
+        return next;
+      });
+      setTasks((prev) => {
+        /**
+         * ⚠️ 必须「有则改、无则加」，**不能只 `map`**。
+         *
+         * `map` 只改动已存在的条目 —— 对改名 / 计时这类池内更新是对的，但对
+         * **跨池搬迁**（Q3 待执行清单 → Q1/Q2/Q4）就是致命的：此时任务还在
+         * 待执行池里、日池根本没有它，`map` 会静默丢弃，于是两个池都没了这条任务，
+         * 详情抽屉因 `findTask` 返回 undefined 而当场关闭（实测症状：
+         * 切象限后抽屉一闪而没，任务凭空消失）。
+         * 与上方 rest 分支保持对称的 add-or-update 语义即可。
+         */
+        const next = (
+          prev.some((t) => t.id === updated.id)
+            ? prev.map((t) => (t.id === updated.id ? updated : t))
+            : [...prev, updated]
+        ).sort(byScheduledTime);
+        saveSnapshot(next, tasksDateRef.current);
+        return next;
+      });
+    }
+    if (isRemoteMode() && SERVER_ID.test(updated.id)) {
+      const op: PendingOp = { type: "update", task: updated, clientId: `upd-${updated.id}` };
+      enqueue(op);
+      supabaseTaskRepo.updateTask(updated).then((ok) => {
+        if (ok) dequeue(op.clientId);
+      });
+    }
+  }, []);
+
+  /**
+   * 把「本地有、云端一定没有」的任务补推上去。
+   *
+   * 判据是**临时 id**：本地乐观新增的任务 id 形如 `task-lx9f2k`，云端必定没有它；
+   * 凡是 id 不是服务端 uuid 的，就是一条还没落库的真实用户数据。
+   *
+   * 为什么需要它：云端是权威数据源，所以"云端这一天是空的"通常会覆盖本地。
+   * 但有一种情况必须例外 —— 用户**在未登录状态下记了任务**，那些任务从未离开过这台设备。
+   * 若登录瞬间把云端空结果当成权威，用户刚记的东西会被清空。
+   * 这时候正确做法不是保留本地就完事（那会永远推不上去），而是**补推**。
+   */
+  const pushLocalOnlyTasks = useCallback(
+    (dateKey: string) => {
+      if (!isRemoteMode()) return;
+      const localOnly = (loadSnapshot(dateKey) ?? []).filter(
+        (t) => isDayPoolTask(t) && !SERVER_ID.test(t.id)
+      );
+      localOnly.forEach((task) => {
+        const op: PendingOp = { type: "insert", task, dateKey, clientId: `ins-${task.id}` };
+        enqueue(op);
+        void supabaseTaskRepo.insertTask(task, dateKey).then((saved) => {
+          if (!saved) return;
+          dequeue(op.clientId);
+          suppressRemoteRef.current = true;
+          replaceTask(task.id, saved);
+          setTimeout(() => {
+            suppressRemoteRef.current = false;
+          }, 500);
+        });
+      });
+    },
+    [replaceTask]
+  );
+
+  /**
+   * 采纳「某一天」的云端任务 —— **云端是唯一权威数据源**。
+   *
+   * 三种结果分别处理，这是整轮"多端不同步"问题的核心决策点：
+   *
+   *   · `remote === null`（拉取失败）→ **保持本地现状**。绝不注入假数据，
+   *     也绝不把本地清空 —— 一次网络抖动不该被解读成"用户今天没有任务"。
+   *   · 云端这一天为空 → 先看本地是否有**从未落库**的条目：
+   *        - 有 → 补推它们并保留本地（用户在未登录时记下的真实任务，不能清）；
+   *        - 没有但有排队中的新增 → 保留本地（刚记的还没推上去）；
+   *        - 都没有 → 采纳空数组。**"这一天确实没有任务"是有效结论**，
+   *          必须如实呈现，否则"在手机上把某天清空了"永远同步不过来。
+   *   · 云端有数据 → 无条件覆盖本地旧快照 / 旧缓存。
+   *
+   * @returns 是否真的采纳了云端数据（用于决定要不要标记"已同步"）
+   */
+  const adoptRemoteDay = useCallback(
+    (remote: Task[] | null, dateKey: string): boolean => {
+      if (remote === null) return false;
+      const dayTasks = remote.filter(isDayPoolTask);
+      if (dayTasks.length === 0) {
+        // 已经排队的补推先等它自己走完：`pushLocalOnlyTasks` 的第一步就是入队，
+        // 所以队列里还有 insert 时再调一次只会重复入队 + 重复发请求
+        // （轮询是 10s 一轮，会把一次失败放大成持续的请求风暴）。
+        if (hasPendingInserts()) return false;
+        const localStale = (loadSnapshot(dateKey) ?? []).filter(
+          (t) => isDayPoolTask(t) && !SERVER_ID.test(t.id)
+        );
+        if (localStale.length > 0) {
+          pushLocalOnlyTasks(dateKey);
+          return false;
+        }
+      }
+      tasksDateRef.current = dateKey;
+      setTasks((prev) => {
+        if (sameTaskList(prev, dayTasks)) return prev;
+        saveSnapshot(dayTasks, dateKey);
+        return dayTasks;
+      });
+      return true;
+    },
+    [pushLocalOnlyTasks]
+  );
+
+  /**
+   * 采纳云端的「待执行清单」全局池。
+   *
+   * 与日看板刻意采用**不同**的空值策略（池子是全局的，没有"哪一天"的概念）：
+   *   · 非空 → 无条件采纳（云端是权威）。
+   *   · 空   → 仅当本地没有"还没推上去的东西"时才采纳。
+   *
+   * 用「离线队列 / 本地临时 id」做判据，两种意图都能满足：
+   * 刚在断网时记下的条目不会被一次空响应抹掉，而真正清空则如实生效。
+   */
+  const adoptBacklog = useCallback(
+    (remote: Task[]) => {
+      if (remote.length === 0) {
+        const localOnly = (loadBacklogSnapshot() ?? loadSnapshot(todayRef.current) ?? []).filter(
+          (t) => t.category === "rest" && !SERVER_ID.test(t.id)
+        );
+        if (localOnly.length > 0 || hasPendingInserts()) return;
+      }
+      setBacklogTasks((prev) => {
+        if (sameTaskList(prev, remote)) return prev;
+        saveBacklogSnapshot(remote);
+        return remote;
+      });
+    },
+    []
+  );
 
   // ---- 按「查看日期」装载任务：本地快照优先，随后由下方远程数据覆盖 ----
   // 看板与灵感流共用 selectedDate，所以切换日期时这里必须跟着换数据源。
@@ -291,7 +583,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     setToday(t);
   }, []);
 
-  // ---- 装载「待执行清单」全局池：只跑一次（本地快照 / 迁移 / 演示数据）----
+  // ---- 装载「待执行清单」全局池：只跑一次（池子自己的快照 / 从旧版今日快照迁移）----
   //
   // 刻意**不依赖 selectedDate**：换日期不该让这个池重新装载，
   // 那正是「原来切一天池子就空掉」的成因。云端数据由会话建立时拉取（见下方 effect）。
@@ -306,17 +598,22 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   // 与「当前查看日期」的装载刻意分开：昨日之镜永远看的是今天的前一天，
   // 用户翻到别的历史日期时它不该跟着变，否则「昨日之镜」会显示成上月某天。
   //
-  // ⚠️ 远端结果只在**非空**时采纳。未登录 / RLS 未命中时 Supabase 返回的是
-  //    空数组而非错误，拿它覆盖本地快照会把用户昨天离线记录的任务抹掉。
+  // ⚠️ 只在**已登录**时才向云端确认。未登录时 Supabase 因 RLS 返回的是
+  //    空数组而非错误，若照单全收会把用户离线记录的昨日任务抹掉。
+  //    登录之后云端就是权威：包括"昨天确实没有记录"这个结论
+  //    （如实显示空态，而不是继续拿本地旧快照冒充）。
   useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
     void (async () => {
       const snap = loadSnapshot(yesterdayDate);
-      if (!cancelled && snap) setYesterdayTasks(snap);
-      if (isSupabaseConfigured()) {
+      if (!cancelled && snap) {
+        setYesterdayTasks(snap);
+        setYesterdayReady(true);
+      }
+      if (isSupabaseConfigured() && synced) {
         const remote = await fetchTasksOrNull(yesterdayDate);
-        if (!cancelled && remote && remote.length > 0) {
+        if (!cancelled && remote !== null) {
           setYesterdayTasks(remote);
           saveSnapshot(remote, yesterdayDate);
         }
@@ -329,28 +626,23 @@ export function FlowProvider({ children }: { children: ReactNode }) {
   }, [yesterdayDate, synced]);
 
   // ---- 切换查看日期时拉取该日云端任务（已登录才发）----
-  // 快照已在上面同步渲染，这里只做「补齐/纠正」，所以不阻塞首屏、也不闪空列表。
+  // 本地快照已在上面的 effect 里同步渲染过，这里做的是「以云端为准纠正它」，
+  // 所以不阻塞首屏、也不会闪一下空列表。
+  //
+  // ⚠️ 只依赖 `synced`：登录/登出会翻转它，正好覆盖"登录后才该开始拉云端"这件事。
   useEffect(() => {
     if (typeof window === "undefined" || !isSupabaseConfigured()) return;
-    if (!userIdRef.current) return;
+    if (!synced || !userIdRef.current) return;
     let cancelled = false;
     void (async () => {
       const remote = await fetchTasksOrNull(selectedDate);
-      if (cancelled || remote === null) return;
-      // 只收日池：待执行清单由全局池单独维护，按日拉取时把它剔掉，
-      // 否则同一条 Q3 会同时出现在两个池里（改一处、另一处还是旧的）。
-      const dayTasks = remote.filter(isDayPoolTask);
-      // 今日云端为空时保留本地数据（首次登录可把本地任务推上去）；
-      // 历史日期为空就应当是空的 —— 空列表本身是有效结果，要如实呈现。
-      if (dayTasks.length === 0 && selectedDate === todayRef.current) return;
-      tasksDateRef.current = selectedDate;
-      setTasks(dayTasks);
-      saveSnapshot(dayTasks, selectedDate);
+      if (cancelled) return;
+      if (adoptRemoteDay(remote, selectedDate)) setLastSyncedAt(Date.now());
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedDate]);
+  }, [selectedDate, synced, adoptRemoteDay]);
 
   // ---- Supabase 初始化：登录态检测 + 拉取远程任务 + Realtime 订阅 + 离线回退 ----
   useEffect(() => {
@@ -434,27 +726,6 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       });
     };
 
-    /**
-     * 采纳云端返回的「待执行清单」全局池。
-     *
-     * 与日看板刻意采用**不同**的空值策略：
-     *   · 非空 → 无条件采纳（云端是权威）。
-     *   · 空   → 仅当离线队列里没有「还没推上去的条目」时才采纳。
-     *
-     * 日看板那种「空就一律保留本地」是为了不把首次登录的本地任务推掉，
-     * 但那会让「在手机上清空了池子」永远同步不过来。
-     * 这里用「离线队列是否为空」做判据，两种意图都能满足：
-     * 刚在断网时记下的条目不会被一次空响应抹掉，而真正清空则如实生效。
-     */
-    const adoptBacklog = (remote: Task[]) => {
-      if (remote.length === 0 && loadQueue().length > 0) return;
-      setBacklogTasks((prev) => {
-        if (sameTaskList(prev, remote)) return prev;
-        saveBacklogSnapshot(remote);
-        return remote;
-      });
-    };
-
     /** 订阅 tasks 表 Realtime（多端实时同步），重复调用前先断开旧订阅 */
     const subscribeTasks = (userId: string) => {
       // 代理模式（浏览器 + 生产）下 Realtime 不可用：WebSocket 无法穿过 HTTP 反向代理。
@@ -482,8 +753,14 @@ export function FlowProvider({ children }: { children: ReactNode }) {
         .subscribe();
     };
 
-    // ---- 轮询回补：代理模式下 Realtime 的等价替代 ----
-    // 页面可见时每 30s 拉一次云端任务；失败保持本地状态，绝不回退 mock。
+    // ---- 轮询回补：Realtime 的兜底通道 ----
+    //
+    // 两条通道并存，理由很实在：
+    //   · Realtime 可用（直连模式）→ WebSocket 推送是即时的，但**长连接会静默死掉**
+    //     （网络切换、休眠唤醒、中间设备超时回收），而它不一定会触发错误回调。
+    //     所以仍保留一个低频（60s）的兜底轮询：万一 WS 已经哑了，最多一分钟也能自愈。
+    //   · Realtime 不可用（同源代理模式，WS 穿不过 HTTP 反向代理）→ 轮询就是主通道，
+    //     间隔取 10s：用户"在手机上改完、抬头看电脑"，这个量级才等得起。
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let pollInFlight = false;
 
@@ -494,14 +771,80 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    const pollOnce = async () => {
-      // 后台标签页不轮询（省电省流量）；回到前台会立即补一次
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    /**
+     * 补录离线队列（逐条补推，失败累计次数、超过上限即放弃）。
+     *
+     * ⚠️ 失败上限是**必须**的：没有它时，一条永远不可能成功的操作
+     * （更新一条已被别端删掉的行、触发约束报错……）会永久留在队列里，
+     * 而"队列非空就暂停拉取"的判据会让**多端同步永久停摆** ——
+     * 用户看到的是"手机上明明改了，电脑端再也不动了"。宁可有界地放弃并告知，
+     * 也不要无声地卡死整条同步链。
+     */
+    const flushQueue = async () => {
+      const pending = loadQueue();
+      if (pending.length === 0) return;
+      const userId = await currentUserId();
+      if (!userId) return; // 未登录不补录（等下次登录）
+
+      for (const op of pending) {
+        if (cancelled) return;
+        let ok = false;
+        let errText = "";
+        try {
+          if (op.type === "insert") {
+            const saved = await supabaseTaskRepo.insertTask(op.task, op.dateKey);
+            ok = saved !== null;
+            if (ok && saved) {
+              // 关键：换上服务端真实 id —— 否则这条任务的后续改动永远推不上去
+              suppressRemoteRef.current = true;
+              replaceTask(op.task.id, saved);
+              setTimeout(() => {
+                suppressRemoteRef.current = false;
+              }, 500);
+            }
+          } else if (op.type === "update") {
+            ok = await supabaseTaskRepo.updateTask(op.task);
+          } else if (op.type === "delete") {
+            ok = await supabaseTaskRepo.deleteTask(op.id);
+          }
+        } catch (err) {
+          errText = err instanceof Error ? err.message : String(err);
+        }
+        if (ok) {
+          dequeue(op.clientId);
+          continue;
+        }
+        const attempts = bumpAttempt(op.clientId, errText || "云端写入未成功");
+        if (attempts >= MAX_ATTEMPTS) {
+          dequeue(op.clientId);
+          const label =
+            op.type === "delete" ? "一条删除" : op.task.title;
+          console.warn("[FlowMirror] 离线操作连续失败，已放弃并继续同步：", op);
+          pushToast(`「${label}」连续 ${attempts} 次未能同步到云端，已跳过`, "warn");
+        }
+      }
+    };
+
+    /**
+     * 拉一次云端（日看板 + 待执行清单池），并把"该不该采纳"交给统一的采纳函数。
+     *
+     * @param reason 触发来源。定时轮询在后台标签页里直接跳过（省电省流量）；
+     *               其余来源（回到前台 / 窗口获得焦点 / 手动同步）无条件执行 ——
+     *               这些正是"用户回来了，现在就要最新数据"的时刻。
+     */
+    const pollOnce = async (reason: "timer" | "active" | "manual" = "timer") => {
+      if (reason === "timer" && typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
       if (pollInFlight) return;
-      // 有未补录的本地写入时先按兵不动，避免覆盖刚产生的本地改动
-      if (loadQueue().length > 0) return;
       pollInFlight = true;
+      if (reason === "manual") setSyncing(true);
       try {
+        // 先把积压的本地改动推上去。这一步顺带解开了老实现的自锁：
+        // 以前"队列非空 → 整轮跳过"，于是队列一卡就再也不拉取；
+        // 现在补录失败有上限，超限即放弃，绝不会永久挡住后面的拉取。
+        if (loadQueue().length > 0) await flushQueue();
+
         const dateKey = selectedDateRef.current;
         // 两个池并行拉：日看板带 date 过滤，待执行池不带（全量集合）
         const [remote, backlogRemote] = await Promise.all([
@@ -509,35 +852,38 @@ export function FlowProvider({ children }: { children: ReactNode }) {
           fetchBacklogOrNull(),
         ]);
         if (cancelled) return;
-        if (remote) {
-          const dayTasks = remote.filter(isDayPoolTask);
-          // 今日云端为空 → 保留本地（可能是还没推上去的离线任务）
-          if (!(dayTasks.length === 0 && dateKey === todayRef.current)) {
-            setTasks((prev) => {
-              if (sameTaskList(prev, dayTasks)) return prev; // 无变化则不触发重渲染
-              saveSnapshot(dayTasks, dateKey);
-              return dayTasks;
-            });
-          }
-        }
+        if (remote !== null) setLastSyncedAt(Date.now());
+        adoptRemoteDay(remote, dateKey);
         if (backlogRemote) adoptBacklog(backlogRemote);
       } catch (err) {
-        console.warn("[FlowMirror] 轮询同步失败（保持本地状态）：", err);
+        console.warn("[FlowMirror] 同步拉取失败（保持本地状态）：", err);
       } finally {
         pollInFlight = false;
+        if (reason === "manual") setSyncing(false);
       }
     };
 
     const startPolling = () => {
-      if (isRealtimeAvailable()) return; // 有 Realtime 就无需轮询
       stopPolling();
-      pollTimer = setInterval(() => void pollOnce(), 30_000);
+      pollTimer = setInterval(
+        () => void pollOnce("timer"),
+        isRealtimeAvailable() ? 60_000 : 10_000
+      );
     };
 
-    const handleVisibility = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        void pollOnce();
-      }
+    /**
+     * 用户"回来了"——把三条浏览器信号都当成同步触发点。
+     *
+     * 三者的覆盖面并不重合，只监听其中一个会漏：
+     *   · `visibilitychange` → 标签页从后台切回前台；
+     *   · `focus`            → 在同一标签页内、或从别的**窗口**切回来
+     *                          （例如从手机上抬头点一下电脑上的另一扇窗）；
+     *   · `pageshow`         → 从 bfcache 前进/后退恢复页面（这种恢复不触发前两者）。
+     * 任一端在别处改了数据，用户切回来的第一眼就该看到最新的。
+     */
+    const pullOnActive = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void pollOnce("active");
     };
 
     /** 建立已登录会话：拉取云端任务 → 切换已同步 → 订阅 Realtime / 启动轮询 */
@@ -548,24 +894,26 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       const dateKey = selectedDateRef.current;
       // 两个池并行拉：日看板按日过滤，待执行清单是全量集合
       const [remote, backlogRemote] = await Promise.all([
-        supabaseTaskRepo.fetchTasks(dateKey),
+        fetchTasksOrNull(dateKey),
         fetchBacklogOrNull(),
       ]);
       if (cancelled) return;
-      const dayTasks = remote.filter(isDayPoolTask);
-      // 云端有数据则覆盖本地；为空则保留当前本地数据（首次登录可把本地任务推上去）
-      if (dayTasks.length > 0) {
-        tasksDateRef.current = dateKey;
-        setTasks(dayTasks);
-        saveSnapshot(dayTasks, dateKey);
-      }
+      // 云端是权威：**包括"这一天是空的"**。老实现在云端为空时保留本地，
+      // 于是"在手机上把某天清空了"永远同步不过来；现在改由 adoptRemoteDay
+      // 用"本地是否还有从未落库的条目"来区分「云端确实没有」与「本地还没推上去」。
+      if (adoptRemoteDay(remote, dateKey)) setLastSyncedAt(Date.now());
       if (backlogRemote) adoptBacklog(backlogRemote);
       setSynced(true);
       subscribeTasks(userId);
       startPolling();
     };
 
-    /** 清除已登录会话：回退到本地数据（当日快照优先，今日无快照才用演示数据） */
+    /**
+     * 清除已登录会话：回退到本地数据。
+     *
+     * 注意这不是"回退到演示数据"——本地快照本身就是用户真实录入的内容，
+     * 登出只是断开云端通道，不该让屏幕上多出任何陌生的任务。
+     */
     const detachRemoteSession = () => {
       userIdRef.current = null;
       if (channel) {
@@ -575,6 +923,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       stopPolling();
       setUserEmail(null);
       setSynced(false);
+      setLastSyncedAt(null);
       const dateKey = selectedDateRef.current;
       tasksDateRef.current = dateKey;
       setTasks(localTasksFor(dateKey));
@@ -585,19 +934,38 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     (async () => {
       const userId = await currentUserId();
       if (cancelled) return;
-      if (!userId) return; // 未登录：保持本地快照 / mock，不订阅
-      const email = (await supabase.auth.getUser()).data.user?.email ?? null;
+      if (!userId) return; // 未登录：只读本地快照，不订阅也不拉取
+      let email: string | null = null;
+      try {
+        email = (await supabase.auth.getUser()).data.user?.email ?? null;
+      } catch (err) {
+        // 取邮箱失败不该阻断整条同步链：id 已经有了，云端照样能读写
+        console.warn("[FlowMirror] 读取用户邮箱失败（不影响同步）：", err);
+      }
       if (cancelled) return;
       await attachRemoteSession(userId, email);
     })();
+
+    // 手动立即同步：推积压 → 拉最新。未登录时明确告知，而不是静默什么都不做。
+    syncNowRef.current = async () => {
+      const userId = await currentUserId();
+      if (!userId) {
+        pushToast("未登录，无法同步云端数据", "warn");
+        return;
+      }
+      userIdRef.current = userId;
+      await flushQueue();
+      await pollOnce("manual");
+      pushToast("已同步最新数据", "success");
+    };
 
     // 监听认证状态变化（登录 / 登出 / 令牌刷新）——保证密码登录后立即拉取云端数据。
     //
     // ⚠️ 必须区分「从未登录」与「从登录态退出」：
     //    supabase-js 在 subscribe 的瞬间会补发一次 INITIAL_SESSION，未登录时其 session 为 null。
     //    若此时直接走 detachRemoteSession()，会把上面 effect 刚从本地快照恢复出来的任务
-    //    重新覆盖成演示数据（TODAY_TASKS）—— 表现为「离线期间的增删改，一刷新就全部丢失」。
-    //    只有真正经历过登录再登出，才该回退演示数据（顺带避免把账号数据留在登出后的界面上）。
+    //    无谓地再装载一遍（并可能打断正在进行中的首次拉取）。
+    //    只有真正经历过登录再登出，才该走 detach。
     let hadSession = false;
     const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (cancelled) return;
@@ -610,173 +978,61 @@ export function FlowProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    // 5. 网络恢复：补录离线队列
-    const flushQueue = async () => {
-      const pending = loadQueue();
-      if (pending.length === 0) return;
-      const userId = await currentUserId();
-      if (!userId) return; // 未登录不补录（等下次登录）
-
-      for (const op of pending) {
-        if (cancelled) return;
-        let ok = false;
-        if (op.type === "insert") {
-          const saved = await supabaseTaskRepo.insertTask(op.task, op.dateKey);
-          ok = saved !== null;
-        } else if (op.type === "update") {
-          ok = await supabaseTaskRepo.updateTask(op.task);
-        } else if (op.type === "delete") {
-          ok = await supabaseTaskRepo.deleteTask(op.id);
-        }
-        if (ok) dequeue(op.clientId);
-      }
-      // 补录完成后刷新一次远程，确保状态一致（刷新当前查看的那天 + 全局池）
-      const dateKey = selectedDateRef.current;
-      const [refreshed, backlogRefreshed] = await Promise.all([
-        supabaseTaskRepo.fetchTasks(dateKey),
-        fetchBacklogOrNull(),
-      ]);
-      if (cancelled) return;
-      const dayTasks = refreshed.filter(isDayPoolTask);
-      if (dayTasks.length > 0) {
-        tasksDateRef.current = dateKey;
-        setTasks(dayTasks);
-        saveSnapshot(dayTasks, dateKey);
-      }
-      if (backlogRefreshed) adoptBacklog(backlogRefreshed);
+    /** 网络恢复：先补录离线队列，再拉一次最新 */
+    const handleOnline = () => {
+      void (async () => {
+        await flushQueue();
+        await pollOnce("active");
+      })();
     };
 
     if (typeof window !== "undefined") {
-      window.addEventListener("online", flushQueue);
+      window.addEventListener("online", handleOnline);
+      window.addEventListener("focus", pullOnActive);
+      window.addEventListener("pageshow", pullOnActive);
     }
     if (typeof document !== "undefined") {
-      // 从后台切回前台时立即补一次轮询，避免用户看到过期数据
-      document.addEventListener("visibilitychange", handleVisibility);
+      document.addEventListener("visibilitychange", pullOnActive);
     }
 
     return () => {
       cancelled = true;
+      syncNowRef.current = null;
       authSub.subscription.unsubscribe();
       stopPolling();
       if (channel) {
         getSupabase().removeChannel(channel);
       }
       if (typeof window !== "undefined") {
-        window.removeEventListener("online", flushQueue);
+        window.removeEventListener("online", handleOnline);
+        window.removeEventListener("focus", pullOnActive);
+        window.removeEventListener("pageshow", pullOnActive);
       }
       if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", handleVisibility);
+        document.removeEventListener("visibilitychange", pullOnActive);
       }
     };
-  }, [pushToast, localTasksFor, localBacklog]);
+  }, [
+    pushToast,
+    localTasksFor,
+    localBacklog,
+    adoptRemoteDay,
+    adoptBacklog,
+    replaceTask,
+  ]);
 
   /**
-   * 统一的「改单个任务」出口：本地即时改写 + 快照落盘 + 云端同步（失败入离线队列）。
-   *
-   * 时间轴相关的三个写操作（标记时间段 / 开始计时 / 结束计时）、就地改名、
-   * 打钩完成、微复盘沉淀都走这里。各自写一遍三件套极易漏环 —— 漏快照则刷新回滚，
-   * 漏入队则断网丢改动，而这两个 bug 都只在「刷新」或「断网」时才暴露，平时完全看不出来。
-   *
-   * 🔑 **按分类路由到正确的池**：`rest` 落在全局池（不按日期分片），其余落在当日看板。
-   * 两个池按 category 互斥，所以这里同时负责「摘掉另一个池里的同名条目」——
-   * 象限变了就是一次搬家（如 AI 复核把刚记的 q3 改成 q1），
-   * 不摘的话旧池会留下一个点不动的幽灵条目。
+   * 手动立即同步（对外）。真正实现在上面那个 effect 的 ref 里 ——
+   * 这样按钮不会因为"重新订阅 Realtime"而触发副作用。
    */
-  const commitTask = useCallback((updated: Task) => {
-    if (updated.category === "rest") {
-      setTasks((prev) => {
-        if (!prev.some((t) => t.id === updated.id)) return prev;
-        const next = prev.filter((t) => t.id !== updated.id);
-        saveSnapshot(next, tasksDateRef.current);
-        return next;
-      });
-      setBacklogTasks((prev) => {
-        const next = (
-          prev.some((t) => t.id === updated.id)
-            ? prev.map((t) => (t.id === updated.id ? updated : t))
-            : [updated, ...prev]
-        ).sort(byCreatedAtDesc);
-        saveBacklogSnapshot(next);
-        return next;
-      });
-    } else {
-      setBacklogTasks((prev) => {
-        if (!prev.some((t) => t.id === updated.id)) return prev;
-        const next = prev.filter((t) => t.id !== updated.id);
-        saveBacklogSnapshot(next);
-        return next;
-      });
-      setTasks((prev) => {
-        /**
-         * ⚠️ 必须「有则改、无则加」，**不能只 `map`**。
-         *
-         * `map` 只改动已存在的条目 —— 对改名 / 计时这类池内更新是对的，但对
-         * **跨池搬迁**（Q3 待执行清单 → Q1/Q2/Q4）就是致命的：此时任务还在
-         * 待执行池里、日池根本没有它，`map` 会静默丢弃，于是两个池都没了这条任务，
-         * 详情抽屉因 `findTask` 返回 undefined 而当场关闭（实测症状：
-         * 切象限后抽屉一闪而没，任务凭空消失）。
-         * 与上方 rest 分支保持对称的 add-or-update 语义即可。
-         */
-        const next = (
-          prev.some((t) => t.id === updated.id)
-            ? prev.map((t) => (t.id === updated.id ? updated : t))
-            : [...prev, updated]
-        ).sort(byScheduledTime);
-        saveSnapshot(next, tasksDateRef.current);
-        return next;
-      });
+  const syncNow = useCallback(async () => {
+    const fn = syncNowRef.current;
+    if (!fn) {
+      pushToast("云端未配置，当前为纯本地模式", "warn");
+      return;
     }
-    if (isRemoteMode() && SERVER_ID.test(updated.id)) {
-      const op: PendingOp = { type: "update", task: updated, clientId: `upd-${updated.id}` };
-      enqueue(op);
-      supabaseTaskRepo.updateTask(updated).then((ok) => {
-        if (ok) dequeue(op.clientId);
-      });
-    }
-  }, []);
-
-  /** 新增：按分类落进对应的池，并写该池的快照 */
-  const insertTask = useCallback((task: Task) => {
-    if (task.category === "rest") {
-      setBacklogTasks((prev) => {
-        const next = [task, ...prev].sort(byCreatedAtDesc);
-        saveBacklogSnapshot(next);
-        return next;
-      });
-    } else {
-      setTasks((prev) => {
-        const next = [...prev, task].sort(byScheduledTime);
-        saveSnapshot(next, tasksDateRef.current);
-        return next;
-      });
-    }
-  }, []);
-
-  /**
-   * 云端插入成功 → 用服务端返回的真实行替换本地临时条目。
-   *
-   * 先从**两个池**里按「临时 id / 真实 id」各摘一次，再按返回行的分类放回该在的池：
-   * 临时行与真实行的分类理论上一致，但 AI 复核可能在中途改了象限，
-   * 用返回值而不是原对象来决定归属，才不会把一条 q1 塞进待执行池里。
-   */
-  const replaceTask = useCallback((tempId: string, saved: Task) => {
-    setTasks((prev) => {
-      const stripped = prev.filter((t) => t.id !== tempId && t.id !== saved.id);
-      const next = (
-        saved.category === "rest" ? stripped : [...stripped, saved]
-      ).sort(byScheduledTime);
-      saveSnapshot(next, tasksDateRef.current);
-      return next;
-    });
-    setBacklogTasks((prev) => {
-      const stripped = prev.filter((t) => t.id !== tempId && t.id !== saved.id);
-      const next = (
-        saved.category === "rest" ? [saved, ...stripped] : stripped
-      ).sort(byCreatedAtDesc);
-      saveBacklogSnapshot(next);
-      return next;
-    });
-  }, []);
+    await fn();
+  }, [pushToast]);
 
   const completeTask = useCallback(
     (id: string) => {
@@ -1054,6 +1310,7 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     if (!isSupabaseConfigured()) return;
     await getSupabase().auth.signOut();
     setSynced(false);
+    setLastSyncedAt(null);
     const dateKey = selectedDateRef.current;
     tasksDateRef.current = dateKey;
     setTasks(localTasksFor(dateKey));
@@ -1479,6 +1736,9 @@ export function FlowProvider({ children }: { children: ReactNode }) {
     openDetail,
     closeDetail,
     pushToast,
+    syncNow,
+    lastSyncedAt,
+    syncing,
   };
 
   return <FlowContext.Provider value={value}>{children}</FlowContext.Provider>;

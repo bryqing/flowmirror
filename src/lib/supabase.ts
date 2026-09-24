@@ -87,11 +87,36 @@ export function isSupabaseConfigured(): boolean {
   return isConfigured();
 }
 
-/** 当前登录用户 id，未登录返回 null */
+/**
+ * 当前登录用户 id，未登录返回 null。
+ *
+ * ⚠️ **必须先读本地会话（`getSession`），而不是直接 `getUser()`**。
+ *
+ * `getUser()` 每次都要打一次 `/auth/v1/user` 网络请求去校验令牌；而它的调用点
+ * 是「打开应用时决定要不要连云端」——正是最可能网络不佳的时刻。
+ * 一旦这次请求失败，旧实现会把 `data.user` 当成 null，于是「已登录」被误判成
+ * 「未登录」：不拉云端、不订阅、不轮询 —— 用户看到的就是**本地的旧快照**，
+ * 正是「手机已更新、电脑端仍显示旧数据/假数据」这一类症状。
+ *
+ * `getSession()` 读的是本地已持久化的会话（cookie），不依赖网络；只有本地也没有
+ * 会话时才回落到 `getUser()`（处理「会话在别处刷新过」的边缘情况）。
+ */
 export async function currentUserId(): Promise<string | null> {
   if (!isConfigured()) return null;
-  const { data } = await getSupabase().auth.getUser();
-  return data.user?.id ?? null;
+  try {
+    const { data: sessionData } = await getSupabase().auth.getSession();
+    const fromSession = sessionData.session?.user?.id;
+    if (fromSession) return fromSession;
+  } catch (err) {
+    console.warn("[FlowMirror] 读取本地会话失败，尝试向服务端确认：", err);
+  }
+  try {
+    const { data } = await getSupabase().auth.getUser();
+    return data.user?.id ?? null;
+  } catch (err) {
+    console.warn("[FlowMirror] 确认登录状态失败：", err);
+    return null;
+  }
 }
 
 /**

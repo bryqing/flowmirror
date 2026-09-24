@@ -1,21 +1,23 @@
 /**
  * FlowMirror 昨日之镜 · 真实指标计算
  *
- * 设计原则：**指标全部可核对，叙事才允许是示例。**
+ * 设计原则：**一切内容都必须可追溯到用户自己的录入，一条都不许编。**
  *
- * 昨日之镜里有两类内容，来源完全不同，绝不能混为一谈：
+ * 昨日之镜里的每一项都来自前一天的真实数据，没有任何预置文案：
  *
  *   A. 可计算指标 —— 完成率、完成/总数、各板块时长、黑洞切片、踩坑教训。
- *      这些必须**直接从前一天的真实任务记录算出来**（本文件负责），
- *      不允许再读 mock：完成率是用户唯一会盯着看的数字，编一个 71% 毫无意义。
+ *      直接从前一天的真实任务记录算出来（本文件负责）。完成率是用户唯一会
+ *      盯着看的数字，编一个 71% 毫无意义。
  *
- *   B. AI 叙事 —— 记忆碎片、认知金句、最触动的事、睡前感悟、今晨计划、经验卡。
- *      它们产自「微复盘 + 深夜深潜」，目前**还没有落库链路**（表 `mirror_snapshots`
- *      已建但未接入），所以只有 `seed` 示例可用。接入后替换 seed 即可，
- *      本文件的调用方已用 `isReal` 把它们与真实指标区分开显示。
+ *   B. 叙事 —— 记忆碎片、认知金句、最触动的事、睡前感悟、今晨计划、经验卡。
+ *      产自「微复盘 + 深夜深潜」，由 `mirror_snapshots` 落库后回填。
+ *      **在落库链路接入之前，这里一律为空** —— 早先版本用一份写死的示例叙事
+ *      填充（"外界的挑剔，只是内心心虚的放大镜"等），结果是用户在没做任何复盘
+ *      的情况下也看到一整屏"自己的感悟"，分不清哪些是真实沉淀，
+ *      这比空着更糟：空态是诚实的信息，假叙事是误导。
  *
- * 前一天一条任务都没有时不会伪造记录：`isReal` 返回 false，
- * 调用方据此打「示例数据」标记，而不是让用户以为昨天真的完成了 5 项。
+ * 前一天一条任务都没有时不会伪造任何东西：`isReal` 返回 false，
+ * 各字段全为空值/空数组，调用方据此渲染纯净空态。
  */
 
 import type { DayMirror, Task, TimeSlice } from "./types";
@@ -25,13 +27,13 @@ import { fmtDuration } from "./utils";
 export interface DayMirrorResult {
   mirror: DayMirror;
   /**
-   * true  = 全部指标来自前一天的真实任务记录
-   * false = 前一天无任何记录，整套内容回退为示例数据
+   * true  = 前一天有真实任务记录，指标由它们算出
+   * false = 前一天无任何记录，全部字段为空值（不是"示例"，是"没有"）
    */
   isReal: boolean;
 }
 
-/** 空镜像：没有任何记录、也没有示例可回退时使用 */
+/** 空镜像：前一天没有任何记录时使用。全部零值 / 空数组，无任何占位文案。 */
 const EMPTY_MIRROR: Omit<DayMirror, "dateLabel"> = {
   completionRate: 0,
   doneCount: 0,
@@ -112,22 +114,17 @@ function blackholeCommentOf(slices: TimeSlice[], totalMinutes: number): string {
  *
  * @param tasks    前一天的**真实任务列表**（空数组 = 那天没有任何记录）
  * @param dateKey  前一天日期 key "YYYY-MM-DD"
- * @param seed     AI 叙事示例（记忆碎片 / 经验卡等），无落库时的占位内容
+ *
+ * 无记录时返回全空镜像（`isReal: false`）—— 调用方据此渲染空态，
+ * 绝不填充任何预置叙事。
  */
-export function buildDayMirror(
-  tasks: Task[],
-  dateKey: string,
-  seed?: DayMirror
-): DayMirrorResult {
+export function buildDayMirror(tasks: Task[], dateKey: string): DayMirrorResult {
   const dateLabel = fmtDateLabel(dateKey);
   const isReal = tasks.length > 0;
 
-  // 无记录：整套回退示例（调用方会打「示例数据」标记），没有示例就是干净的零值
+  // 无记录：干净的零值，没有可回退的"示例"
   if (!isReal) {
-    return {
-      mirror: seed ? { ...seed, dateLabel } : { ...EMPTY_MIRROR, dateLabel },
-      isReal: false,
-    };
+    return { mirror: { ...EMPTY_MIRROR, dateLabel }, isReal: false };
   }
 
   const totalCount = tasks.length;
@@ -138,7 +135,7 @@ export function buildDayMirror(
   const blackholeSlices = blackholeSlicesOf(tasks);
   const lessons = lessonsOf(tasks);
 
-  /** 与数字自洽的总体评述（不用 seed 里那份写死的评述，否则会和上方数字打架） */
+  /** 与数字自洽的总体评述 */
   const parts = [`完成率 ${Math.round(completionRate * 100)}%，${doneCount}/${totalCount} 项完成`];
   if (deepWorkMinutes > 0) parts.push(`紧急重要 ${fmtDuration(deepWorkMinutes)}`);
   if (blackholeMinutes > 0) parts.push(`休闲娱乐 ${fmtDuration(blackholeMinutes)}`);
@@ -168,13 +165,18 @@ export function buildDayMirror(
       blackholeMinutes,
       blackholeSlices,
       blackholeComment,
-      // 以下为 AI 叙事：尚未落库，沿用示例；接入后替换这里即可
-      memoryFragments: seed?.memoryFragments ?? [],
-      mostTouching: seed?.mostTouching ?? "",
-      lessons: lessons.length > 0 ? lessons : (seed?.lessons ?? []),
-      insightCards: seed?.insightCards ?? [],
-      bedtimeReflection: seed?.bedtimeReflection ?? "",
-      morningPlan: seed?.morningPlan ?? "",
+      /**
+       * 以下为叙事字段：微复盘 / 深夜深潜的沉淀，等 `mirror_snapshots`
+       * 落库链路接入后从云端回填。在那之前**保持空**——
+       * 绝不用预置文案冒充用户自己写下的感悟。
+       * 注意 `lessons` 是唯一已经落库的真实叙事：它直接来自任务上的微复盘笔记。
+       */
+      memoryFragments: [],
+      mostTouching: "",
+      lessons,
+      insightCards: [],
+      bedtimeReflection: "",
+      morningPlan: "",
       overallComment,
     },
   };
